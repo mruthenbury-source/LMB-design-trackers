@@ -72,5 +72,16 @@ export async function handler(req) {
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
+  import { app } from "@azure/functions";
+
+app.http("chat", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  handler: async (req) => {
+    // return something simple for testing
+    return { status: 200, jsonBody: { ok: true, answer: "chat route exists" } };
+  },
+});
+
 }
 
