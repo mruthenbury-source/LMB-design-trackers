@@ -1,0 +1,12 @@
+{
+  "name": "workback-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "dependencies": {
+    "@azure/functions": "^4.6.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "isomorphic-fetch": "^3.0.0"
+  }
+}
