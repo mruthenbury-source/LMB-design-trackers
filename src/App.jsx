@@ -493,11 +493,10 @@ export default function App() {
   const [globalDaysStatusAToFirstIssue, setGlobalDaysStatusAToFirstIssue] = useState(28);
 
   const [projects, setProjects] = useState([defaultProject("Project 1")]);
-  const [activeProjectId, setActiveProjectId] = useState(null);
-  const [activePageId, setActivePageId] = useState(null);
-
+ 
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
+  
   // ----- derived selections -----
   const activeProject = useMemo(
     () => projects.find((p) => p.id === activeProjectId) || projects[0] || null,
