@@ -498,6 +498,57 @@ export default function App() {
 
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
+  // ----- derived selections -----
+  const activeProject = useMemo(
+    () => projects.find((p) => p.id === activeProjectId) || projects[0] || null,
+    [projects, activeProjectId]
+  );
+
+  const activePage = useMemo(() => {
+    if (!activeProject) return null;
+    return activeProject.pages?.find((pg) => pg.id === activePageId) || activeProject.pages?.[0] || null;
+  }, [activeProject, activePageId]);
+
+  // ----- immutable update helpers -----
+  function updateProject(projectId, patch) {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === projectId ? { ...p, ...patch } : p))
+    );
+  }
+
+  function updatePage(projectId, pageId, patch) {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        const pages = (p.pages || []).map((pg) =>
+          pg.id === pageId ? { ...pg, ...patch } : pg
+        );
+        return { ...p, pages };
+      })
+    );
+  }
+
+  function updateRow(rowId, patch) {
+    if (!activeProject || !activePage) return;
+
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== activeProject.id) return p;
+
+        const pages = (p.pages || []).map((pg) => {
+          if (pg.id !== activePage.id) return pg;
+
+          const rows = (pg.rows || []).map((r) =>
+            r.id === rowId ? { ...r, ...patch } : r
+          );
+
+          return { ...pg, rows };
+        });
+
+        return { ...p, pages };
+      })
+    );
+  }
 
   // Server-side permissions (filled by /api/bootstrap)
   const [myRole, setMyRole] = useState("viewer");
