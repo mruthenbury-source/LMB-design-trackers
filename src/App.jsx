@@ -3,40 +3,6 @@ import ChatOverlay from "./ChatOverlay.jsx";
 
 const LS_KEY = "design-programme-workback:v16";
 
-// -------------------- Server persistence (SharePoint via Azure Functions) --------------------
-// In local dev your vite.config.js proxies /api -> http://localhost:5174
-// Deploy target: Azure Static Web Apps + Azure Functions.
-// If the API is unavailable, the app will fall back to localStorage.
-const USE_SERVER = true;
-
-async function apiGetJSON(url) {
-  const res = await fetch(url, { credentials: "same-origin" });
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json();
-}
-
-async function apiPostJSON(url, body) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json().catch(() => ({}));
-}
-
-async function apiPatchJSON(url, body) {
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json().catch(() => ({}));
-}
-
 /* ---------- date helpers ---------- */
 function isoToday() {
   const d = new Date();
@@ -460,7 +426,10 @@ function ProgrammeGantt({ master, dense = false }) {
             <div style={styles.ganttChartCol}>
               <div style={styles.ganttLane}>
                 {hasDates ? (
-                  <div style={{ ...styles.ganttBar, left: `${left}%`, width: `${width}%` }} title={`${it.startISO || "—"} → ${it.finishISO || "—"}`} />
+                  <div
+                    style={{ ...styles.ganttBar, left: `${left}%`, width: `${width}%` }}
+                    title={`${it.startISO || "—"} → ${it.finishISO || "—"}`}
+                  />
                 ) : (
                   <div style={styles.ganttBarMissing}>No dates</div>
                 )}
@@ -499,11 +468,6 @@ export default function App() {
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
 
-  // Server-side permissions (filled by /api/bootstrap)
-  const [myRole, setMyRole] = useState("viewer");
-  const [rolesByPageId, setRolesByPageId] = useState({});
-  const saveTimerRef = useRef(null);
-
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
   const [summaryProjectId, setSummaryProjectId] = useState("all");
@@ -525,19 +489,6 @@ export default function App() {
   const [chatBusy, setChatBusy] = useState(false);
   const [chatStatus, setChatStatus] = useState("idle"); // "idle" | "checking" | "ok" | "error"
   const chatEndRef = useRef(null);
-  const CHAT_WELCOME = {
-    role: "assistant",
-    content:
-      "Ask me about your programme data. Examples:\n• What is overdue next?\n• Which supplier has the most overdue items?\n• What are the next Status A dates in Project 1?",
-  };
-
-  function resetChat() {
-    setChatMessages([CHAT_WELCOME]);
-    setChatInput("");
-    setChatBusy(false);
-    setChatStatus("idle");
-  }
-
 
   useEffect(() => {
     if (!chatOpen) return;
@@ -551,161 +502,123 @@ export default function App() {
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
 
-  function hydrateProjects(rawProjects) {
-    if (!Array.isArray(rawProjects) || !rawProjects.length) return [defaultProject("Project 1")];
-
-    return rawProjects.map((proj) => {
-      const master =
-        Array.isArray(proj.master) && proj.master.length
-          ? proj.master.map((m) => ({
-              id: m.id || uid(),
-              blockZone: m.blockZone || "",
-              levels:
-                Array.isArray(m.levels) && m.levels.length
-                  ? m.levels.map((lv, idx) => ({
-                      id: lv.id || uid(),
-                      name: lv.name || `Level ${idx + 1}`,
-                      startDate: lv.startDate || "",
-                      finishDate: lv.finishDate || "",
-                    }))
-                  : [defaultLevel("Level 1")],
-            }))
-          : [defaultMasterRow()];
-
-      const responsibilities =
-        Array.isArray(proj.responsibilities) && proj.responsibilities.length
-          ? proj.responsibilities.map((r) => ({
-              id: r.id || uid(),
-              name: r.name || "",
-              supplier: r.supplier || "",
-            }))
-          : [defaultResponsibility()];
-
-      const pages =
-        Array.isArray(proj.pages) && proj.pages.length
-          ? proj.pages.map((pg) => {
-              const rawName = pg.name || "Untitled Page";
-              const migratedName = pg.meta?.isMaster && rawName === "Master" ? "Project Home" : rawName;
-
-              return {
-                id: pg.id || uid(),
-                name: migratedName,
-                rows: Array.isArray(pg.rows)
-                  ? pg.rows.map((r) => ({
-                      ...defaultRow(r.kind || "item"),
-                      ...r,
-                      id: r.id || uid(),
-                      kind: r.kind || "item",
-                      completed: !!r.completed,
-                      notRequired: !!r.notRequired,
-                      statusADone: !!r.statusADone,
-                      firstIssueDone: !!r.firstIssueDone,
-                      meta: {
-                        generated: !!r?.meta?.generated,
-                        blockZone: r?.meta?.blockZone || "",
-                        levelId: r?.meta?.levelId ?? null,
-                        levelName: r?.meta?.levelName || "",
-                        finishDate: r?.meta?.finishDate || "",
-                      },
-                    }))
-                  : [],
-                meta: {
-                  generated: !!pg?.meta?.generated,
-                  responsibilityId: pg?.meta?.responsibilityId ?? null,
-                  isMaster: !!pg?.meta?.isMaster,
-                },
-              };
-            })
-          : [];
-
-      if (!pages.some((p) => p.meta?.isMaster)) {
-        pages.unshift({
-          id: uid(),
-          name: "Project Home",
-          rows: [],
-          meta: { generated: false, responsibilityId: null, isMaster: true },
-        });
-      }
-
-      return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
-    });
-  }
-
   /* ---- load ---- */
   useEffect(() => {
-    (async () => {
-      try {
-        if (USE_SERVER) {
-          const boot = await apiGetJSON("/api/bootstrap");
-
-          if (boot?.settings) {
-            if (Number.isFinite(boot.settings.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(boot.settings.globalDaysReqToStatusA);
-            if (Number.isFinite(boot.settings.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(boot.settings.globalDaysStatusAToFirstIssue);
-          }
-
-          if (boot?.me?.role) setMyRole(String(boot.me.role));
-          if (boot?.rolesByPageId && typeof boot.rolesByPageId === "object") setRolesByPageId(boot.rolesByPageId);
-
-          if (Array.isArray(boot?.projects) && boot.projects.length) {
-            const hydrated = hydrateProjects(boot.projects);
-            setProjects(hydrated);
-
-            const pid = boot.activeProjectId || hydrated[0].id;
-            setActiveProjectId(pid);
-
-            const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
-            const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
-            setActivePageId(boot.activePageId || masterPg.id);
-
-            if (boot.view && Object.values(VIEW).includes(boot.view)) setView(boot.view);
-            if (typeof boot.summaryFilter === "string") setSummaryFilter(boot.summaryFilter);
-            if (typeof boot.summaryProjectId === "string") setSummaryProjectId(boot.summaryProjectId);
-            if (typeof boot.summarySupplier === "string") setSummarySupplier(boot.summarySupplier);
-
-            return;
-          }
-        }
-      } catch {
-        // fall back to localStorage
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) {
+        didHydrateRef.current = true;
+        return;
       }
 
-      // local fallback
-      try {
-        const raw = localStorage.getItem(LS_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
 
-        if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
-        if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
+      if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
+      if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue))
+        setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
 
-        if (Array.isArray(parsed.projects) && parsed.projects.length) {
-          const hydrated = hydrateProjects(parsed.projects);
-          setProjects(hydrated);
-          const pid = parsed.activeProjectId || hydrated[0].id;
-          setActiveProjectId(pid);
-          const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
-          const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
-          setActivePageId(parsed.activePageId || masterPg.id);
-        }
+      if (Array.isArray(parsed.projects) && parsed.projects.length) {
+        const hydrated = parsed.projects.map((proj) => {
+          const master =
+            Array.isArray(proj.master) && proj.master.length
+              ? proj.master.map((m) => ({
+                  id: m.id || uid(),
+                  blockZone: m.blockZone || "",
+                  levels:
+                    Array.isArray(m.levels) && m.levels.length
+                      ? m.levels.map((lv, idx) => ({
+                          id: lv.id || uid(),
+                          name: lv.name || `Level ${idx + 1}`,
+                          startDate: lv.startDate || "",
+                          finishDate: lv.finishDate || "",
+                        }))
+                      : [defaultLevel("Level 1")],
+                }))
+              : [defaultMasterRow()];
 
-        if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
-        if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
-        if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
-        if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
-      } catch {
-        // ignore
+          const responsibilities =
+            Array.isArray(proj.responsibilities) && proj.responsibilities.length
+              ? proj.responsibilities.map((r) => ({
+                  id: r.id || uid(),
+                  name: r.name || "",
+                  supplier: r.supplier || "",
+                }))
+              : [defaultResponsibility()];
+
+          const pages =
+            Array.isArray(proj.pages) && proj.pages.length
+              ? proj.pages.map((pg) => {
+                  const rawName = pg.name || "Untitled Page";
+                  const migratedName = pg.meta?.isMaster && rawName === "Master" ? "Project Home" : rawName;
+
+                  return {
+                    id: pg.id || uid(),
+                    name: migratedName,
+                    rows: Array.isArray(pg.rows)
+                      ? pg.rows.map((r) => ({
+                          ...defaultRow(r.kind || "item"),
+                          ...r,
+                          id: r.id || uid(),
+                          kind: r.kind || "item",
+                          completed: !!r.completed,
+                          notRequired: !!r.notRequired,
+                          statusADone: !!r.statusADone,
+                          firstIssueDone: !!r.firstIssueDone,
+                          meta: {
+                            generated: !!r?.meta?.generated,
+                            blockZone: r?.meta?.blockZone || "",
+                            levelId: r?.meta?.levelId ?? null,
+                            levelName: r?.meta?.levelName || "",
+                            finishDate: r?.meta?.finishDate || "",
+                          },
+                        }))
+                      : [],
+                    meta: {
+                      generated: !!pg?.meta?.generated,
+                      responsibilityId: pg?.meta?.responsibilityId ?? null,
+                      isMaster: !!pg?.meta?.isMaster,
+                    },
+                  };
+                })
+              : [];
+
+          if (!pages.some((p) => p.meta?.isMaster)) {
+            pages.unshift({
+              id: uid(),
+              name: "Project Home",
+              rows: [],
+              meta: { generated: false, responsibilityId: null, isMaster: true },
+            });
+          }
+
+          return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
+        });
+
+        setProjects(hydrated);
+
+        const pid = parsed.activeProjectId || hydrated[0].id;
+        setActiveProjectId(pid);
+
+        const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
+        const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
+        setActivePageId(parsed.activePageId || masterPg.id);
       }
-    })().finally(() => {
+
+      if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
+      if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
+      if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
+      if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
+    } catch {
+      // ignore
+    } finally {
       didHydrateRef.current = true;
-    });
+    }
   }, []);
-  
 
   /* ---- persist ---- */
   useEffect(() => {
-    // ✅ prevent overwriting saved data on the first render
     if (!didHydrateRef.current) return;
-  
+
     const payload = {
       globalDaysReqToStatusA,
       globalDaysStatusAToFirstIssue,
@@ -717,21 +630,11 @@ export default function App() {
       summaryProjectId,
       summarySupplier,
     };
-  
+
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
     } catch {
       // ignore
-    }
-
-    // Server save (debounced) - writes whole state to SharePoint Lists via Azure Functions
-    if (USE_SERVER) {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = setTimeout(() => {
-        apiPostJSON("/api/save", payload).catch(() => {
-          // keep UI usable even if server is unavailable
-        });
-      }, 800);
     }
   }, [
     globalDaysReqToStatusA,
@@ -744,103 +647,54 @@ export default function App() {
     summaryProjectId,
     summarySupplier,
   ]);
-  
-  /* ---- derived active project/page ---- */
-  const activeProject = useMemo(
-    () => projects.find((p) => p.id === (activeProjectId || projects[0]?.id)) || projects[0] || null,
-    [projects, activeProjectId]
-  );
 
-  const activePage = useMemo(() => {
-    if (!activeProject) return null;
-    return (
-      activeProject.pages.find((pg) => pg.id === (activePageId || activeProject.pages[0]?.id)) ||
-      activeProject.pages[0] ||
-      null
-    );
-  }, [activeProject, activePageId]);
-
-  // ----- immutable update helpers -----
-  function updateProject(projectId, patch) {
-    setProjects((prev) =>
-      prev.map((p) => (p.id === projectId ? { ...p, ...patch } : p))
-    );
-  }
-
-  function updatePage(projectId, pageId, patch) {
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id !== projectId) return p;
-        const pages = (p.pages || []).map((pg) =>
-          pg.id === pageId ? { ...pg, ...patch } : pg
-        );
-        return { ...p, pages };
-      })
-    );
-  }
-
-  function updateRow(rowId, patch) {
-    if (!activeProject || !activePage) return;
-
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id !== activeProject.id) return p;
-
-        const pages = (p.pages || []).map((pg) => {
-          if (pg.id !== activePage.id) return pg;
-
-          const rows = (pg.rows || []).map((r) =>
-            r.id === rowId ? { ...r, ...patch } : r
-          );
-
-          return { ...pg, rows };
-        });
-
-        return { ...p, pages };
-      })
-    );
-  }
- 
-
-  const roleForActivePage = useMemo(() => {
-    const pid = activePage?.id;
-    if (!pid) return myRole;
-    return rolesByPageId[pid] || myRole;
-  }, [activePage?.id, rolesByPageId, myRole]);
-
-  const isTickOnly = roleForActivePage === "tickonly" || roleForActivePage === "tickOnly" || roleForActivePage === "checkbox";
-  const isReadOnly = roleForActivePage === "readonly" || roleForActivePage === "readOnly" || roleForActivePage === "viewer";
-  const canEditAll = !(isTickOnly || isReadOnly);
-
-  // Ensure we always have valid active IDs
-  useEffect(() => {
-    if (!projects.length) return;
-    if (!activeProjectId) setActiveProjectId(projects[0].id);
+  /* ---- derived active project/page (CLEAN + SAFE) ---- */
+  const activeProject = useMemo(() => {
+    if (!projects?.length) return null;
+    return projects.find((p) => p.id === activeProjectId) || projects[0] || null;
   }, [projects, activeProjectId]);
 
-  useEffect(() => {
-    if (!activeProject) return;
-    if (!activePageId) {
-      const mp = activeProject.pages.find((p) => p.meta?.isMaster) || activeProject.pages[0];
-      setActivePageId(mp?.id || null);
-    }
+  const activePage = useMemo(() => {
+    if (!activeProject?.pages?.length) return null;
+    return activeProject.pages.find((pg) => pg.id === activePageId) || activeProject.pages[0] || null;
   }, [activeProject, activePageId]);
 
-  /* ---- update helpers ---- */
+  // ✅ Self-heal active IDs if null/invalid (prevents “can’t type / buttons don’t work”)
+  useEffect(() => {
+    if (!projects?.length) return;
+
+    const projectValid = projects.some((p) => p.id === activeProjectId);
+    if (!projectValid) {
+      const p0 = projects[0];
+      setActiveProjectId(p0.id);
+      const mp = p0.pages?.find((p) => p.meta?.isMaster) || p0.pages?.[0] || null;
+      setActivePageId(mp?.id || null);
+      return;
+    }
+
+    const proj = projects.find((p) => p.id === activeProjectId);
+    if (!proj?.pages?.length) return;
+
+    const pageValid = proj.pages.some((pg) => pg.id === activePageId);
+    if (!pageValid) {
+      const mp = proj.pages.find((p) => p.meta?.isMaster) || proj.pages[0];
+      setActivePageId(mp?.id || null);
+    }
+  }, [projects, activeProjectId, activePageId]);
+
+  /* ---- update helpers (single source of truth) ---- */
   function updateProject(projectId, patch) {
-    if (!canEditAll) return;
     setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...patch } : p)));
   }
 
   function updatePage(projectId, pageId, patch) {
-    if (!canEditAll) return;
     setProjects((prev) =>
       prev.map((p) =>
         p.id !== projectId
           ? p
           : {
               ...p,
-              pages: p.pages.map((pg) => (pg.id === pageId ? { ...pg, ...patch } : pg)),
+              pages: (p.pages || []).map((pg) => (pg.id === pageId ? { ...pg, ...patch } : pg)),
             }
       )
     );
@@ -849,18 +703,13 @@ export default function App() {
   function updateRow(rowId, patch) {
     if (!activeProject || !activePage) return;
 
-    const tickKeys = ["completed", "notRequired", "statusADone", "firstIssueDone"];
-    const patchKeys = Object.keys(patch || {});
-    const isOnlyTickPatch = patchKeys.length > 0 && patchKeys.every((k) => tickKeys.includes(k));
-    if ((isTickOnly || isReadOnly) && !isOnlyTickPatch) return;
-
     setProjects((prev) =>
       prev.map((p) => {
         if (p.id !== activeProject.id) return p;
 
         return {
           ...p,
-          pages: p.pages.map((pg) =>
+          pages: (p.pages || []).map((pg) =>
             pg.id !== activePage.id
               ? pg
               : {
@@ -871,17 +720,6 @@ export default function App() {
         };
       })
     );
-
-    // Persist tick patches immediately (best UX for external users)
-    if (USE_SERVER && isOnlyTickPatch) {
-      apiPatchJSON(`/api/rows/${encodeURIComponent(rowId)}/tick`, {
-        projectId: activeProject.id,
-        pageId: activePage.id,
-        patch,
-      }).catch(() => {
-        // ignore - debounced full save will also attempt later
-      });
-    }
   }
 
   /* ---- master edits ---- */
@@ -1332,6 +1170,18 @@ export default function App() {
     }
   }
 
+  function resetChat() {
+    setChatMessages([
+      {
+        role: "assistant",
+        content:
+          "Ask me about your programme data. Examples:\n• What is overdue next?\n• Which supplier has the most overdue items?\n• What are the next Status A dates in Project 1?",
+      },
+    ]);
+    setChatInput("");
+    setChatStatus("idle");
+  }
+
   /* ---------- VIEW: LANDING ---------- */
   if (view === VIEW.LANDING) {
     return (
@@ -1688,7 +1538,6 @@ function ProjectView(props) {
     updateProject,
     updateRow,
     computedRows,
-    addProject,
     addMasterRow,
     updateMasterRow,
     removeMasterRow,
@@ -1709,7 +1558,6 @@ function ProjectView(props) {
     VIEW,
   } = props;
 
-  // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
       <div style={styles.selectorBlock}>
@@ -1772,7 +1620,6 @@ function ProjectView(props) {
         </div>
       </div>
 
-      {/* ✅ always left aligned, and ✅ NO "+ Project" here */}
       <div style={styles.card}>
         <SelectorBar />
         <div style={{ marginTop: 10 }}>
@@ -1785,7 +1632,6 @@ function ProjectView(props) {
         </div>
       </div>
 
-      {/* Defaults (hidden on Project Home) */}
       {!isMasterPage ? (
         <div style={styles.card}>
           <div style={styles.cardHeader}>
@@ -1817,7 +1663,6 @@ function ProjectView(props) {
         </div>
       ) : null}
 
-      {/* Project Home */}
       {isMasterPage ? (
         <div style={styles.card}>
           <div style={styles.tableTop}>
@@ -2015,7 +1860,6 @@ function ProjectView(props) {
           </div>
         </div>
       ) : (
-        /* Tracker Page */
         <div style={styles.card}>
           <div style={styles.tableTop}>
             <div>
@@ -2136,7 +1980,13 @@ function ProjectView(props) {
                       </td>
 
                       <td style={styles.td}>
-                        <DatePill value={r._computed.requiredOnSite} isHeader={r.kind === "header"} overdue={!!r._overdue?.overdueReq} done={r.completed} muted={r.notRequired} />
+                        <DatePill
+                          value={r._computed.requiredOnSite}
+                          isHeader={r.kind === "header"}
+                          overdue={!!r._overdue?.overdueReq}
+                          done={r.completed}
+                          muted={r.notRequired}
+                        />
                       </td>
 
                       <td style={styles.td}>
@@ -2172,7 +2022,11 @@ function ProjectView(props) {
                               min={0}
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
-                              onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
+                              onChange={(e) =>
+                                updateRow(r.id, {
+                                  overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0),
+                                })
+                              }
                               disabled={r.notRequired}
                               title="Req→A"
                             />
@@ -2182,7 +2036,11 @@ function ProjectView(props) {
                               min={0}
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
-                              onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
+                              onChange={(e) =>
+                                updateRow(r.id, {
+                                  overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0),
+                                })
+                              }
                               disabled={r.notRequired}
                               title="A→First"
                             />
@@ -2408,7 +2266,6 @@ const styles = {
   ganttBar: { position: "absolute", top: 6, height: 16, borderRadius: 999, background: "#111827" },
   ganttBarMissing: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#9CA3AF" },
 
-
   /* --- Fullscreen programme summary --- */
   fullscreen: { position: "fixed", inset: 0, background: "#F8FAFC", display: "flex", flexDirection: "column" },
   fullTopBar: { padding: 12, background: "#FFFFFF", borderBottom: "1px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
@@ -2419,3 +2276,4 @@ const styles = {
   projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
   projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
 };
+
