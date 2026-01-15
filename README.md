@@ -111,3 +111,6 @@ Weekly backups run via a timer function:
 
 Replace `api/src/functions/chat.js` with your Azure OpenAI call. The current file is a safe placeholder so the UI stays green/neutral.
 
+trigger redeploy
+
+
