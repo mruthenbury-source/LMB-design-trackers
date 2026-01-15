@@ -2276,4 +2276,3 @@ const styles = {
   projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
   projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
 };
-
