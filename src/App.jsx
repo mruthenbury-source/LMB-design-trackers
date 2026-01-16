@@ -466,7 +466,30 @@ export default function App() {
   const [activePageId, setActivePageId] = useState(null);
 
   const [view, setView] = useState(VIEW.LANDING);
+
+  // refs
   const didHydrateRef = useRef(false);
+  const saveTimerRef = useRef(null);
+
+  // ---------- server state helpers ----------
+  async function loadStateFromServer() {
+    const r = await fetch("/api/state", { method: "GET" });
+    const data = await r.json();
+    return data?.state ?? null;
+  }
+
+  async function saveStateToServer(payload) {
+    await fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: payload }),
+    });
+  }
+
+  // effects come AFTER this
+  // useEffect(...)
+
+
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -501,17 +524,18 @@ export default function App() {
     }, 0);
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
-
-  /* ---- load ---- */
-  useEffect(() => {
+  
+/* ---- load (from server / Blob via /api/state) ---- */
+useEffect(() => {
+  (async () => {
     try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) {
+      const parsed = await loadStateFromServer();
+
+      // No server state yet → allow app defaults
+      if (!parsed) {
         didHydrateRef.current = true;
         return;
       }
-
-      const parsed = JSON.parse(raw);
 
       if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
       if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue))
@@ -582,6 +606,7 @@ export default function App() {
                 })
               : [];
 
+          // Ensure master page exists
           if (!pages.some((p) => p.meta?.isMaster)) {
             pages.unshift({
               id: uid(),
@@ -611,32 +636,17 @@ export default function App() {
     } catch {
       // ignore
     } finally {
+      // ✅ only start saving AFTER hydration attempt finishes
       didHydrateRef.current = true;
     }
-  }, []);
+  })();
+}, []);
 
-  /* ---- persist ---- */
-  useEffect(() => {
-    if (!didHydrateRef.current) return;
+/* ---- persist (to server / Blob via /api/state) ---- */
+useEffect(() => {
+  if (!didHydrateRef.current) return;
 
-    const payload = {
-      globalDaysReqToStatusA,
-      globalDaysStatusAToFirstIssue,
-      projects,
-      activeProjectId,
-      activePageId,
-      view,
-      summaryFilter,
-      summaryProjectId,
-      summarySupplier,
-    };
-
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore
-    }
-  }, [
+  const payload = {
     globalDaysReqToStatusA,
     globalDaysStatusAToFirstIssue,
     projects,
@@ -646,7 +656,39 @@ export default function App() {
     summaryFilter,
     summaryProjectId,
     summarySupplier,
-  ]);
+  };
+
+  // Optional: keep local cache too (handy if server is down)
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore
+  }
+
+  // Debounce server saves
+  if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+  saveTimerRef.current = setTimeout(() => {
+    saveStateToServer(payload).catch(() => {
+      // ignore (you can surface a toast later if you want)
+    });
+  }, 600);
+
+  return () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+  };
+}, [
+  globalDaysReqToStatusA,
+  globalDaysStatusAToFirstIssue,
+  projects,
+  activeProjectId,
+  activePageId,
+  view,
+  summaryFilter,
+  summaryProjectId,
+  summarySupplier,
+]);
+
 
   /* ---- derived active project/page (CLEAN + SAFE) ---- */
   const activeProject = useMemo(() => {
