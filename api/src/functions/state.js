@@ -3,7 +3,7 @@ import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
 
 function getBlobClients() {
-  const conn = process.env.AzureWebJobsStorage;
+  const conn = process.env.BLOB_CONNECTION_STRING;
   const containerName = process.env.STATE_CONTAINER || "workback";
   const blobName = process.env.STATE_BLOB_NAME || "state.json";
 
