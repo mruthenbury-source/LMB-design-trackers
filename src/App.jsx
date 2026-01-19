@@ -152,6 +152,21 @@ function TrafficKeyDotsOnly() {
         <TrafficDot status="na" />
         <span style={styles.keyText}>N/A</span>
       </span>
+      <RowCommentsModal
+        open={!!commentsRowId}
+        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
+        person={commentPerson}
+        setPerson={setCommentPerson}
+        text={commentText}
+        setText={setCommentText}
+        onClose={closeRowComments}
+        onAdd={() => {
+          if (!commentsRowId) return;
+          addCommentToRow(commentsRowId, commentPerson, commentText);
+          setCommentText("");
+        }}
+      />
+
     </div>
   );
 }
@@ -228,7 +243,7 @@ function defaultMasterRow() {
   return { id: uid(), blockZone: "", levels: [defaultLevel("Level 1")] };
 }
 function defaultResponsibility() {
-  return { id: uid(), name: "", supplier: "" };
+  return { id: uid(), name: "", supplier: "", comments: [] };
 }
 function defaultRow(kind = "item") {
   return {
@@ -243,6 +258,7 @@ function defaultRow(kind = "item") {
     notRequired: false,
     statusADone: false,
     firstIssueDone: false,
+    comments: [],
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
 }
@@ -445,6 +461,21 @@ function ProgrammeGantt({ master, dense = false }) {
           </div>
         );
       })}
+      <RowCommentsModal
+        open={!!commentsRowId}
+        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
+        person={commentPerson}
+        setPerson={setCommentPerson}
+        text={commentText}
+        setText={setCommentText}
+        onClose={closeRowComments}
+        onAdd={() => {
+          if (!commentsRowId) return;
+          addCommentToRow(commentsRowId, commentPerson, commentText);
+          setCommentText("");
+        }}
+      />
+
     </div>
   );
 }
@@ -477,6 +508,14 @@ export default function App() {
 
   // per-page row search
   const [rowSearch, setRowSearch] = useState("");
+
+  // Row comments
+  const [commentsRowId, setCommentsRowId] = useState(null);
+  const [commentPerson, setCommentPerson] = useState("");
+  const [commentText, setCommentText] = useState("");
+  const [commentsRowId, setCommentsRowId] = useState(null);
+  const [commentPerson, setCommentPerson] = useState(\"\");
+  const [commentText, setCommentText] = useState(\"\");
 
   // ---------- server state helpers ----------
   async function loadStateFromServer() {
@@ -775,6 +814,50 @@ useEffect(() => {
         };
       })
     );
+  }
+
+  function addCommentToRow(rowId, person, text) {
+    const p = (person || "").trim();
+    const t = (text || "").trim();
+    if (!p || !t) return;
+
+    const now = new Date().toISOString();
+
+    // read current row comments safely
+    const currentRow = (activePage?.rows || []).find((r) => r.id === rowId);
+    const nextComments = [...(currentRow?.comments || []), { id: uid(), date: now, person: p, text: t }];
+    updateRow(rowId, { comments: nextComments });
+  }
+
+  function openRowComments(rowId) {
+    const currentRow = (activePage?.rows || []).find((r) => r.id === rowId);
+    setCommentsRowId(rowId);
+    setCommentPerson("");
+    setCommentText("");
+
+    // If we have a previous person in the latest comment, prefill lightly
+    const last = (currentRow?.comments || [])[ (currentRow?.comments || []).length - 1];
+    if (last?.person) setCommentPerson(last.person);
+  }
+
+  function closeRowComments() {
+    setCommentsRowId(null);
+    setCommentPerson("");
+    setCommentText("");
+  }
+
+  const commentsRow = useMemo(() => {
+    if (!commentsRowId || !activePage) return null;
+    return (activePage.rows || []).find((r) => r.id === commentsRowId) || null;
+  }, [commentsRowId, activePage]);
+
+  function addModalComment() {
+    if (!commentsRowId) return;
+    const person = String(commentPerson || '').trim();
+    const text = String(commentText || '').trim();
+    if (!person || !text) return;
+    addCommentToRow(commentsRowId, person, text);
+    setCommentText('');
   }
 
   /* ---- master edits ---- */
@@ -1567,8 +1650,19 @@ useEffect(() => {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
+          openRowComments={openRowComments}
         />
       </div>
+      <CommentsModal
+        open={!!commentsRowId}
+        row={commentsRow}
+        person={commentPerson}
+        setPerson={setCommentPerson}
+        text={commentText}
+        setText={setCommentText}
+        onAdd={addModalComment}
+        onClose={closeRowComments}
+      />
 
       <ChatOverlay
         open={chatOpen}
@@ -1619,6 +1713,7 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
+    openRowComments,
   } = props;
 
   const visibleRows = useMemo(() => {
@@ -1981,7 +2076,7 @@ function ProjectView(props) {
                   <th style={styles.thMed}>Status A</th>
                   <th style={styles.thMed}>First</th>
                   <th style={styles.thTf}>TF</th>
-                  <th style={styles.thSmall}></th>
+                  <th style={styles.thSmall}>⋯</th>
                 </tr>
               </thead>
               <tbody>
@@ -2143,9 +2238,22 @@ function ProjectView(props) {
 
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
-                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
-                            ✕
-                          </button>
+                          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                            <button
+                              style={styles.iconBtn}
+                              onClick={() => openRowComments(r.id)}
+                              title={
+                                (r.comments || []).length
+                                  ? `Comments (${(r.comments || []).length})`
+                                  : "Add / view comments"
+                              }
+                            >
+                              💬{(r.comments || []).length ? ` ${(r.comments || []).length}` : ""}
+                            </button>
+                            <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
+                              ✕
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -2156,11 +2264,153 @@ function ProjectView(props) {
           </div>
         </div>
       )}
+      <RowCommentsModal
+        open={!!commentsRowId}
+        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
+        person={commentPerson}
+        setPerson={setCommentPerson}
+        text={commentText}
+        setText={setCommentText}
+        onClose={closeRowComments}
+        onAdd={() => {
+          if (!commentsRowId) return;
+          addCommentToRow(commentsRowId, commentPerson, commentText);
+          setCommentText("");
+        }}
+      />
+
     </div>
   );
 }
 
 /* ---------- small components ---------- */
+
+function RowCommentsModal({ open, row, person, setPerson, text, setText, onClose, onAdd }) {
+  if (!open) return null;
+
+  const comments = Array.isArray(row?.comments) ? row.comments : [];
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(17,24,39,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        zIndex: 50,
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          width: "min(820px, 100%)",
+          background: "#fff",
+          borderRadius: 16,
+          border: "1px solid #E5E7EB",
+          boxShadow: "0 20px 60px rgba(17,24,39,0.22)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: 14,
+            borderBottom: "1px solid #E5E7EB",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            gap: 10,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 14 }}>Comments</div>
+            <div style={{ color: "#6B7280", fontSize: 12, marginTop: 2 }}>{row?.item || ""}</div>
+          </div>
+          <button style={styles.iconBtn} onClick={onClose} title="Close">
+            ✕
+          </button>
+        </div>
+
+        <div style={{ padding: 14, display: "grid", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
+            <label style={styles.label}>
+              Person
+              <input
+                style={styles.input}
+                placeholder="Name"
+                value={person}
+                onChange={(e) => setPerson(e.target.value)}
+              />
+            </label>
+            <label style={styles.label}>
+              Comment
+              <input
+                style={styles.input}
+                placeholder="Add a comment..."
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onAdd();
+                }}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button style={styles.secondaryBtn} onClick={onClose}>
+              Close
+            </button>
+            <button
+              style={styles.primaryBtn}
+              onClick={onAdd}
+              disabled={!String(person || "").trim() || !String(text || "").trim()}
+            >
+              Add comment
+            </button>
+          </div>
+
+          <div
+            style={{
+              border: "1px solid #E5E7EB",
+              borderRadius: 14,
+              overflow: "hidden",
+              background: "#fff",
+            }}
+          >
+            <div style={{ padding: 10, background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", fontWeight: 900, fontSize: 12 }}>
+              History ({comments.length})
+            </div>
+            <div style={{ maxHeight: 320, overflow: "auto" }}>
+              {comments.length === 0 ? (
+                <div style={{ padding: 12, color: "#6B7280", fontSize: 12 }}>No comments yet.</div>
+              ) : (
+                [...comments]
+                  .slice()
+                  .reverse()
+                  .map((c) => (
+                    <div key={c.id} style={{ padding: 12, borderBottom: "1px solid #F3F4F6" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                        <div style={{ fontWeight: 900, fontSize: 12 }}>{c.person}</div>
+                        <div style={{ color: "#6B7280", fontSize: 12 }}>
+                          {c.dateUtc ? new Date(c.dateUtc).toLocaleString() : ""}
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 12, color: "#111827", whiteSpace: "pre-wrap" }}>{c.comment}</div>
+                    </div>
+                  ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SaveBadge({ status, lastSavedUtc }) {
   const label =
     status === "saving"
@@ -2191,6 +2441,21 @@ function SaveBadge({ status, lastSavedUtc }) {
       title={label}
     >
       {label}
+      <RowCommentsModal
+        open={!!commentsRowId}
+        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
+        person={commentPerson}
+        setPerson={setCommentPerson}
+        text={commentText}
+        setText={setCommentText}
+        onClose={closeRowComments}
+        onAdd={() => {
+          if (!commentsRowId) return;
+          addCommentToRow(commentsRowId, commentPerson, commentText);
+          setCommentText("");
+        }}
+      />
+
     </div>
   );
 }
@@ -2209,6 +2474,21 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
       }}
     >
       {empty ? "—" : value}
+      <RowCommentsModal
+        open={!!commentsRowId}
+        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
+        person={commentPerson}
+        setPerson={setCommentPerson}
+        text={commentText}
+        setText={setCommentText}
+        onClose={closeRowComments}
+        onAdd={() => {
+          if (!commentsRowId) return;
+          addCommentToRow(commentsRowId, commentPerson, commentText);
+          setCommentText("");
+        }}
+      />
+
     </div>
   );
 }
@@ -2229,6 +2509,21 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
         {empty ? "—" : value}
       </div>
       <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
+      <RowCommentsModal
+        open={!!commentsRowId}
+        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
+        person={commentPerson}
+        setPerson={setCommentPerson}
+        text={commentText}
+        setText={setCommentText}
+        onClose={closeRowComments}
+        onAdd={() => {
+          if (!commentsRowId) return;
+          addCommentToRow(commentsRowId, commentPerson, commentText);
+          setCommentText("");
+        }}
+      />
+
     </div>
   );
 }
@@ -2249,6 +2544,94 @@ function FilterPill({ label, active, onClick }) {
   );
 }
 
+
+function CommentsModal({ open, row, person, setPerson, text, setText, onAdd, onClose }) {
+  if (!open) return null;
+  const comments = row?.comments || [];
+  const title = row?.item ? `Comments — ${row.item}` : "Comments";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(17,24,39,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        zIndex: 1000,
+      }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        style={{
+          width: "min(900px, 100%)",
+          background: "#FFFFFF",
+          borderRadius: 18,
+          border: "1px solid #E5E7EB",
+          boxShadow: "0 20px 70px rgba(17,24,39,0.25)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
+        >
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 14 }}>{title}</div>
+            <div style={{ color: "#6B7280", fontSize: 12 }}>{comments.length ? `${comments.length} comment(s)` : "No comments yet"}</div>
+          </div>
+          <button style={styles.secondaryBtn} onClick={onClose}>Close</button>
+        </div>
+
+        <div style={{ padding: 14, display: "grid", gap: 10 }}
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 10, alignItems: "start" }}
+          >
+            <label style={styles.label}>
+              Person
+              <input style={styles.input} value={person} onChange={(e) => setPerson(e.target.value)} placeholder="Name" />
+            </label>
+            <label style={styles.label}>
+              Comment
+              <textarea
+                style={{ ...styles.input, minHeight: 80, resize: "vertical" }}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Add a note…"
+              />
+            </label>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+          >
+            <button style={styles.primaryBtn} onClick={onAdd} disabled={!person.trim() || !text.trim()}>
+              Add comment
+            </button>
+          </div>
+
+          <div style={{ border: "1px solid #E5E7EB", borderRadius: 14, overflow: "hidden" }}
+          >
+            <div style={{ maxHeight: 300, overflow: "auto" }}
+            >
+              {(comments.slice().reverse()).map((c) => (
+                <div key={c.id || `${c.date}-${c.person}`} style={{ padding: 12, borderBottom: "1px solid #F3F4F6" }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 900 }}>{c.person || ""}</div>
+                    <div style={{ color: "#6B7280", fontSize: 12 }}>{c.date ? new Date(c.date).toLocaleString() : ""}</div>
+                  </div>
+                  <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{c.text || ""}</div>
+                </div>
+              ))}
+              {!comments.length ? <div style={{ padding: 12, color: "#6B7280" }}>No comments yet.</div> : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 /* ---------- styles ---------- */
 const MAX_W = 1320;
 const TEAL = "#0D9488";
