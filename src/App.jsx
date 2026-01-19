@@ -152,21 +152,6 @@ function TrafficKeyDotsOnly() {
         <TrafficDot status="na" />
         <span style={styles.keyText}>N/A</span>
       </span>
-      <RowCommentsModal
-        open={!!commentsRowId}
-        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
-        person={commentPerson}
-        setPerson={setCommentPerson}
-        text={commentText}
-        setText={setCommentText}
-        onClose={closeRowComments}
-        onAdd={() => {
-          if (!commentsRowId) return;
-          addCommentToRow(commentsRowId, commentPerson, commentText);
-          setCommentText("");
-        }}
-      />
-
     </div>
   );
 }
@@ -258,7 +243,8 @@ function defaultRow(kind = "item") {
     notRequired: false,
     statusADone: false,
     firstIssueDone: false,
-    comments: [],
+    locks: {}, // { [field]: { locked: true, by: string, at: string } }
+    auditTrail: [], // { id, at, by, action, field, value }
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
 }
@@ -461,21 +447,6 @@ function ProgrammeGantt({ master, dense = false }) {
           </div>
         );
       })}
-      <RowCommentsModal
-        open={!!commentsRowId}
-        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
-        person={commentPerson}
-        setPerson={setCommentPerson}
-        text={commentText}
-        setText={setCommentText}
-        onClose={closeRowComments}
-        onAdd={() => {
-          if (!commentsRowId) return;
-          addCommentToRow(commentsRowId, commentPerson, commentText);
-          setCommentText("");
-        }}
-      />
-
     </div>
   );
 }
@@ -506,28 +477,55 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [lastSavedUtc, setLastSavedUtc] = useState(null);
 
+  // auth / permissions (from /api/bootstrap)
+  const [me, setMe] = useState({ authenticated: false, name: "", email: "", role: "viewer" });
+  const [rolesByPageId, setRolesByPageId] = useState({});
+
   // per-page row search
   const [rowSearch, setRowSearch] = useState("");
 
-  // Row comments
-  const [commentsRowId, setCommentsRowId] = useState(null);
-  const [commentPerson, setCommentPerson] = useState("");
-  const [commentText, setCommentText] = useState("");
-  // (de-duplicated declarations)
+  // tick confirmation / locking
+  const [tickDialog, setTickDialog] = useState(null);
+  // { rowId, patch, message }
+  const [tickBusy, setTickBusy] = useState(false);
+
+  // Design Responsibilities comments UI
+  const [openResponsibilityId, setOpenResponsibilityId] = useState(null);
+  const [respCommentPerson, setRespCommentPerson] = useState("");
+  const [respCommentText, setRespCommentText] = useState("");
 
   // ---------- server state helpers ----------
   async function loadStateFromServer() {
-    const r = await fetch("/api/state", { method: "GET" });
-    const data = await r.json();
-    return data?.state ?? null;
+    const r = await fetch("/api/bootstrap", { method: "GET" });
+    if (!r.ok) throw new Error("bootstrap_failed");
+    const data = await r.json().catch(() => null);
+    return data || null;
   }
 
   async function saveStateToServer(payload) {
-    await fetch("/api/state", {
+    const r = await fetch("/api/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: payload }),
+      body: JSON.stringify(payload),
     });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err?.error || "save_failed");
+    }
+  }
+
+  async function tickRowOnServer(rowId, patch) {
+    const r = await fetch(`/api/rows/${encodeURIComponent(rowId)}/tick`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patch }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err?.error || "tick_failed");
+    }
+    const data = await r.json().catch(() => ({}));
+    return data?.row ?? null;
   }
 
   // effects come AFTER this
@@ -569,17 +567,29 @@ export default function App() {
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
   
-/* ---- load (from server / Blob via /api/state) ---- */
+/* ---- load (from server via /api/bootstrap; fallback to local cache) ---- */
 useEffect(() => {
   (async () => {
     try {
-      const parsed = await loadStateFromServer();
+      let parsed = await loadStateFromServer();
 
-      // No server state yet → allow app defaults
+      // If bootstrap fails or returns nothing, fallback to local cache
+      if (!parsed) {
+        try {
+          const cached = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+          parsed = cached || null;
+        } catch {
+          parsed = null;
+        }
+      }
+
       if (!parsed) {
         didHydrateRef.current = true;
         return;
       }
+
+      if (parsed.me) setMe(parsed.me);
+      if (parsed.rolesByPageId) setRolesByPageId(parsed.rolesByPageId);
 
       if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
       if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue))
@@ -610,6 +620,7 @@ useEffect(() => {
                   id: r.id || uid(),
                   name: r.name || "",
                   supplier: r.supplier || "",
+                  comments: Array.isArray(r.comments) ? r.comments : [],
                 }))
               : [defaultResponsibility()];
 
@@ -678,7 +689,25 @@ useEffect(() => {
       if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
       if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
     } catch {
-      // ignore
+      // last resort fallback
+      try {
+        const cached = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+        if (cached) {
+          if (cached.me) setMe(cached.me);
+          if (cached.rolesByPageId) setRolesByPageId(cached.rolesByPageId);
+          if (Number.isFinite(cached.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(cached.globalDaysReqToStatusA);
+          if (Number.isFinite(cached.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(cached.globalDaysStatusAToFirstIssue);
+          if (Array.isArray(cached.projects) && cached.projects.length) setProjects(cached.projects);
+          if (cached.activeProjectId) setActiveProjectId(cached.activeProjectId);
+          if (cached.activePageId) setActivePageId(cached.activePageId);
+          if (cached.view && Object.values(VIEW).includes(cached.view)) setView(cached.view);
+          if (typeof cached.summaryFilter === "string") setSummaryFilter(cached.summaryFilter);
+          if (typeof cached.summaryProjectId === "string") setSummaryProjectId(cached.summaryProjectId);
+          if (typeof cached.summarySupplier === "string") setSummarySupplier(cached.summarySupplier);
+        }
+      } catch {
+        // ignore
+      }
     } finally {
       // ✅ only start saving AFTER hydration attempt finishes
       didHydrateRef.current = true;
@@ -686,9 +715,12 @@ useEffect(() => {
   })();
 }, []);
 
-/* ---- persist (to server / Blob via /api/state) ---- */
+/* ---- persist (to server via /api/save) ---- */
 useEffect(() => {
   if (!didHydrateRef.current) return;
+
+  const role = String(me?.role || "viewer").toLowerCase();
+  const canWrite = role === "admin" || role === "owner" || role === "editor";
 
   const payload = {
     globalDaysReqToStatusA,
@@ -700,6 +732,8 @@ useEffect(() => {
     summaryFilter,
     summaryProjectId,
     summarySupplier,
+    me,
+    rolesByPageId,
   };
 
   // Optional: keep local cache too (handy if server is down)
@@ -709,7 +743,12 @@ useEffect(() => {
     // ignore
   }
 
-  // Debounce server saves
+  // Debounce server saves (write roles only)
+  if (!canWrite) {
+    setSaveStatus("idle");
+    return;
+  }
+
   if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
   saveTimerRef.current = setTimeout(() => {
@@ -737,6 +776,8 @@ useEffect(() => {
   summaryFilter,
   summaryProjectId,
   summarySupplier,
+  me,
+  rolesByPageId,
 ]);
 
 
@@ -814,48 +855,128 @@ useEffect(() => {
     );
   }
 
-  function addCommentToRow(rowId, person, text) {
-    const p = (person || "").trim();
-    const t = (text || "").trim();
-    if (!p || !t) return;
+  const TICK_FIELDS = ["completed", "notRequired", "statusADone", "firstIssueDone"];
 
-    const now = new Date().toISOString();
-
-    // read current row comments safely
-    const currentRow = (activePage?.rows || []).find((r) => r.id === rowId);
-    const nextComments = [...(currentRow?.comments || []), { id: uid(), date: now, person: p, text: t }];
-    updateRow(rowId, { comments: nextComments });
+  function pageRoleForActivePage() {
+    const pageId = activePage?.id;
+    const r = (pageId && rolesByPageId && rolesByPageId[pageId]) || me?.role || "viewer";
+    return String(r || "viewer").toLowerCase();
   }
 
-  function openRowComments(rowId) {
-    const currentRow = (activePage?.rows || []).find((r) => r.id === rowId);
-    setCommentsRowId(rowId);
-    setCommentPerson("");
-    setCommentText("");
-
-    // If we have a previous person in the latest comment, prefill lightly
-    const last = (currentRow?.comments || [])[ (currentRow?.comments || []).length - 1];
-    if (last?.person) setCommentPerson(last.person);
+  function canTick() {
+    const role = pageRoleForActivePage();
+    return role === "tickonly" || role === "checkbox" || role === "editor" || role === "admin" || role === "owner";
   }
 
-  function closeRowComments() {
-    setCommentsRowId(null);
-    setCommentPerson("");
-    setCommentText("");
+  function isAdmin() {
+    const role = pageRoleForActivePage();
+    return role === "admin" || role === "owner";
   }
 
-  const commentsRow = useMemo(() => {
-    if (!commentsRowId || !activePage) return null;
-    return (activePage.rows || []).find((r) => r.id === commentsRowId) || null;
-  }, [commentsRowId, activePage]);
+  function currentUserLabel() {
+    return clean(me?.name) || clean(me?.email) || "Unknown";
+  }
 
-  function addModalComment() {
-    if (!commentsRowId) return;
-    const person = String(commentPerson || '').trim();
-    const text = String(commentText || '').trim();
-    if (!person || !text) return;
-    addCommentToRow(commentsRowId, person, text);
-    setCommentText('');
+  function applyRowReplacement(rowId, newRow) {
+    if (!activeProject || !activePage) return;
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== activeProject.id) return p;
+        return {
+          ...p,
+          pages: (p.pages || []).map((pg) =>
+            pg.id !== activePage.id
+              ? pg
+              : {
+                  ...pg,
+                  rows: (pg.rows || []).map((r) => (r.id === rowId ? { ...r, ...newRow } : r)),
+                }
+          ),
+        };
+      })
+    );
+  }
+
+  async function runTick(rowId, patch) {
+    const updated = await tickRowOnServer(rowId, patch);
+    if (updated) applyRowReplacement(rowId, updated);
+    else updateRow(rowId, patch);
+  }
+
+  function requestTick(row, patch) {
+    if (!row || row.kind === "header") return;
+    if (!activePage) return;
+    if (!canTick()) {
+      window.alert("You do not have permission to tick boxes on this page.");
+      return;
+    }
+
+    // determine if this is a lock-sensitive change
+    const keys = Object.keys(patch || {});
+    const lockBlocked = keys.some((k) => TICK_FIELDS.includes(k) && patch[k] === false && row?.locks?.[k]?.locked);
+    if (lockBlocked && !isAdmin()) {
+      window.alert("This checkbox is locked. Only an administrator can unlock it.");
+      return;
+    }
+
+    const tickingOn = keys.some((k) => TICK_FIELDS.includes(k) && patch[k] === true);
+    const unlocking = keys.some((k) => TICK_FIELDS.includes(k) && patch[k] === false && row?.locks?.[k]?.locked);
+
+    if (tickingOn) {
+      setTickDialog({
+        rowId: row.id,
+        patch,
+        message:
+          "Asking supplier to confirm and this will be recorded in the Audit trail and locked. Only administrator can unlock.",
+      });
+      return;
+    }
+
+    if (unlocking) {
+      setTickDialog({
+        rowId: row.id,
+        patch,
+        message: "This will unlock the checkbox and record the change in the Audit trail. Continue?",
+      });
+      return;
+    }
+
+    // safe immediate update
+    runTick(row.id, patch).catch(() => window.alert("Unable to update checkbox (server refused or unavailable)."));
+  }
+
+  function TickDialogOverlay() {
+    if (!tickDialog) return null;
+    return (
+      <div style={styles.modalBackdrop} onMouseDown={() => !tickBusy && setTickDialog(null)}>
+        <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
+          <div style={{ fontWeight: 800, fontSize: 14 }}>Confirm</div>
+          <div style={{ marginTop: 8, color: "#374151", lineHeight: 1.4 }}>{tickDialog.message}</div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14 }}>
+            <button style={styles.secondaryBtn} onClick={() => setTickDialog(null)} disabled={tickBusy}>
+              Cancel
+            </button>
+            <button
+              style={styles.primaryBtn}
+              disabled={tickBusy}
+              onClick={async () => {
+                try {
+                  setTickBusy(true);
+                  await runTick(tickDialog.rowId, tickDialog.patch);
+                  setTickDialog(null);
+                } catch {
+                  window.alert("Unable to update checkbox (server refused or unavailable).");
+                } finally {
+                  setTickBusy(false);
+                }
+              }}
+            >
+              Confirm
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   /* ---- master edits ---- */
@@ -1392,6 +1513,8 @@ useEffect(() => {
           status={chatStatus}
           onReset={resetChat}
         />
+
+        <TickDialogOverlay />
       </>
     );
   }
@@ -1462,6 +1585,8 @@ useEffect(() => {
           status={chatStatus}
           onReset={resetChat}
         />
+
+        <TickDialogOverlay />
       </>
     );
   }
@@ -1648,19 +1773,16 @@ useEffect(() => {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
-          openRowComments={openRowComments}
+          requestTick={requestTick}
+          openResponsibilityId={openResponsibilityId}
+          setOpenResponsibilityId={setOpenResponsibilityId}
+          respCommentPerson={respCommentPerson}
+          setRespCommentPerson={setRespCommentPerson}
+          respCommentText={respCommentText}
+          setRespCommentText={setRespCommentText}
+          currentUserLabel={currentUserLabel}
         />
       </div>
-      <CommentsModal
-        open={!!commentsRowId}
-        row={commentsRow}
-        person={commentPerson}
-        setPerson={setCommentPerson}
-        text={commentText}
-        setText={setCommentText}
-        onAdd={addModalComment}
-        onClose={closeRowComments}
-      />
 
       <ChatOverlay
         open={chatOpen}
@@ -1674,6 +1796,8 @@ useEffect(() => {
         status={chatStatus}
         onReset={resetChat}
       />
+
+      <TickDialogOverlay />
     </>
   );
 }
@@ -1711,7 +1835,14 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
-    openRowComments,
+    requestTick,
+    openResponsibilityId,
+    setOpenResponsibilityId,
+    respCommentPerson,
+    setRespCommentPerson,
+    respCommentText,
+    setRespCommentText,
+    currentUserLabel,
   } = props;
 
   const visibleRows = useMemo(() => {
@@ -1983,34 +2114,122 @@ function ProjectView(props) {
                   <tr>
                     <th style={styles.th}>Responsibility (page name)</th>
                     <th style={styles.th}>Supplier</th>
+                    <th style={styles.th}>Comments</th>
                     <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {(activeProject?.responsibilities || []).map((r) => (
-                    <tr key={r.id}>
-                      <td style={styles.td}>
+                    <React.Fragment key={r.id}>
+                      <tr>
+                        <td style={styles.td}>
                         <input
                           style={styles.input}
                           placeholder="e.g. MSA / NCCT / Stone"
                           value={r.name}
                           onChange={(e) => updateResponsibility(r.id, { name: e.target.value })}
                         />
-                      </td>
-                      <td style={styles.td}>
+                        </td>
+                        <td style={styles.td}>
                         <input
                           style={styles.input}
                           placeholder="e.g. ABC Consultants"
                           value={r.supplier || ""}
                           onChange={(e) => updateResponsibility(r.id, { supplier: e.target.value })}
                         />
-                      </td>
-                      <td style={styles.td}>
+                        </td>
+                        <td style={styles.td}>
+                          <button
+                            style={styles.smallBtn}
+                            onClick={() => {
+                              setOpenResponsibilityId((prev) => (prev === r.id ? null : r.id));
+                              setRespCommentPerson(currentUserLabel());
+                              setRespCommentText("");
+                            }}
+                          >
+                            {openResponsibilityId === r.id ? "Hide" : "Comments"} ({(r.comments || []).length || 0})
+                          </button>
+                        </td>
+                        <td style={styles.td}>
                         <button style={styles.iconBtn} onClick={() => removeResponsibility(r.id)} title="Remove">
                           ✕
                         </button>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+
+                      {openResponsibilityId === r.id ? (
+                        <tr>
+                          <td style={styles.td} colSpan={4}>
+                            <div style={styles.commentsPanel}>
+                              <div style={styles.commentsHeader}>
+                                <div style={{ fontWeight: 700 }}>Comments</div>
+                                <div style={styles.muted}>Date · Person · Comment</div>
+                              </div>
+
+                              <div style={styles.commentsForm}>
+                                <label style={styles.label}>
+                                  Person
+                                  <input
+                                    style={styles.input}
+                                    value={respCommentPerson}
+                                    onChange={(e) => setRespCommentPerson(e.target.value)}
+                                    placeholder="Name"
+                                  />
+                                </label>
+                                <label style={styles.label}>
+                                  Comment
+                                  <textarea
+                                    style={{ ...styles.input, minHeight: 70, resize: "vertical" }}
+                                    value={respCommentText}
+                                    onChange={(e) => setRespCommentText(e.target.value)}
+                                    placeholder="Add a comment..."
+                                  />
+                                </label>
+                                <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                                  <button
+                                    style={styles.primaryBtn}
+                                    onClick={() => {
+                                      const person = clean(respCommentPerson) || currentUserLabel();
+                                      const text = clean(respCommentText);
+                                      if (!text) return;
+                                      const next = [
+                                        {
+                                          id: uid(),
+                                          dateISO: isoToday(),
+                                          person,
+                                          comment: text,
+                                        },
+                                        ...(Array.isArray(r.comments) ? r.comments : []),
+                                      ];
+                                      updateResponsibility(r.id, { comments: next });
+                                      setRespCommentText("");
+                                    }}
+                                  >
+                                    + Add comment
+                                  </button>
+                                </div>
+                              </div>
+
+                              {(r.comments || []).length ? (
+                                <div style={styles.commentList}>
+                                  {(r.comments || []).map((c) => (
+                                    <div key={c.id || uid()} style={styles.commentItem}>
+                                      <div style={styles.commentMeta}>
+                                        <span style={styles.pillCompact}>{c.dateISO || "—"}</span>
+                                        <span style={{ fontWeight: 700 }}>{c.person || "—"}</span>
+                                      </div>
+                                      <div style={{ whiteSpace: "pre-wrap" }}>{c.comment || ""}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div style={styles.muted}>No comments yet.</div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -2074,7 +2293,7 @@ function ProjectView(props) {
                   <th style={styles.thMed}>Status A</th>
                   <th style={styles.thMed}>First</th>
                   <th style={styles.thTf}>TF</th>
-                  <th style={styles.thSmall}>⋯</th>
+                  <th style={styles.thSmall}></th>
                 </tr>
               </thead>
               <tbody>
@@ -2099,7 +2318,7 @@ function ProjectView(props) {
                           <input
                             type="checkbox"
                             checked={!!r.completed}
-                            onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
+                            onChange={(e) => requestTick(r, { completed: e.target.checked })}
                             disabled={r.notRequired}
                           />
                         )}
@@ -2112,7 +2331,7 @@ function ProjectView(props) {
                             checked={!!r.notRequired}
                             onChange={(e) => {
                               const checked = e.target.checked;
-                              updateRow(r.id, {
+                              requestTick(r, {
                                 notRequired: checked,
                                 ...(checked ? { completed: false, statusADone: false, firstIssueDone: false } : {}),
                               });
@@ -2180,7 +2399,7 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.statusA}
                           checked={!!r.statusADone}
-                          onChange={(checked) => updateRow(r.id, { statusADone: checked })}
+                          onChange={(checked) => requestTick(r, { statusADone: checked })}
                           overdue={!!r._overdue?.overdueA}
                           disabled={disabled}
                           muted={r.notRequired}
@@ -2192,7 +2411,7 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.firstIssue}
                           checked={!!r.firstIssueDone}
-                          onChange={(checked) => updateRow(r.id, { firstIssueDone: checked })}
+                          onChange={(checked) => requestTick(r, { firstIssueDone: checked })}
                           overdue={!!r._overdue?.overdueF}
                           disabled={disabled}
                           muted={r.notRequired}
@@ -2236,22 +2455,9 @@ function ProjectView(props) {
 
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
-                          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                            <button
-                              style={styles.iconBtn}
-                              onClick={() => openRowComments(r.id)}
-                              title={
-                                (r.comments || []).length
-                                  ? `Comments (${(r.comments || []).length})`
-                                  : "Add / view comments"
-                              }
-                            >
-                              💬{(r.comments || []).length ? ` ${(r.comments || []).length}` : ""}
-                            </button>
-                            <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
-                              ✕
-                            </button>
-                          </div>
+                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
+                            ✕
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -2262,153 +2468,11 @@ function ProjectView(props) {
           </div>
         </div>
       )}
-      <RowCommentsModal
-        open={!!commentsRowId}
-        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
-        person={commentPerson}
-        setPerson={setCommentPerson}
-        text={commentText}
-        setText={setCommentText}
-        onClose={closeRowComments}
-        onAdd={() => {
-          if (!commentsRowId) return;
-          addCommentToRow(commentsRowId, commentPerson, commentText);
-          setCommentText("");
-        }}
-      />
-
     </div>
   );
 }
 
 /* ---------- small components ---------- */
-
-function RowCommentsModal({ open, row, person, setPerson, text, setText, onClose, onAdd }) {
-  if (!open) return null;
-
-  const comments = Array.isArray(row?.comments) ? row.comments : [];
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(17,24,39,0.45)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-        zIndex: 50,
-      }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: "min(820px, 100%)",
-          background: "#fff",
-          borderRadius: 16,
-          border: "1px solid #E5E7EB",
-          boxShadow: "0 20px 60px rgba(17,24,39,0.22)",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            padding: 14,
-            borderBottom: "1px solid #E5E7EB",
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: 10,
-          }}
-        >
-          <div>
-            <div style={{ fontWeight: 900, fontSize: 14 }}>Comments</div>
-            <div style={{ color: "#6B7280", fontSize: 12, marginTop: 2 }}>{row?.item || ""}</div>
-          </div>
-          <button style={styles.iconBtn} onClick={onClose} title="Close">
-            ✕
-          </button>
-        </div>
-
-        <div style={{ padding: 14, display: "grid", gap: 10 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
-            <label style={styles.label}>
-              Person
-              <input
-                style={styles.input}
-                placeholder="Name"
-                value={person}
-                onChange={(e) => setPerson(e.target.value)}
-              />
-            </label>
-            <label style={styles.label}>
-              Comment
-              <input
-                style={styles.input}
-                placeholder="Add a comment..."
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") onAdd();
-                }}
-              />
-            </label>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button style={styles.secondaryBtn} onClick={onClose}>
-              Close
-            </button>
-            <button
-              style={styles.primaryBtn}
-              onClick={onAdd}
-              disabled={!String(person || "").trim() || !String(text || "").trim()}
-            >
-              Add comment
-            </button>
-          </div>
-
-          <div
-            style={{
-              border: "1px solid #E5E7EB",
-              borderRadius: 14,
-              overflow: "hidden",
-              background: "#fff",
-            }}
-          >
-            <div style={{ padding: 10, background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", fontWeight: 900, fontSize: 12 }}>
-              History ({comments.length})
-            </div>
-            <div style={{ maxHeight: 320, overflow: "auto" }}>
-              {comments.length === 0 ? (
-                <div style={{ padding: 12, color: "#6B7280", fontSize: 12 }}>No comments yet.</div>
-              ) : (
-                [...comments]
-                  .slice()
-                  .reverse()
-                  .map((c) => (
-                    <div key={c.id} style={{ padding: 12, borderBottom: "1px solid #F3F4F6" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                        <div style={{ fontWeight: 900, fontSize: 12 }}>{c.person}</div>
-                        <div style={{ color: "#6B7280", fontSize: 12 }}>
-                          {c.dateUtc ? new Date(c.dateUtc).toLocaleString() : ""}
-                        </div>
-                      </div>
-                      <div style={{ marginTop: 6, fontSize: 12, color: "#111827", whiteSpace: "pre-wrap" }}>{c.comment}</div>
-                    </div>
-                  ))
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function SaveBadge({ status, lastSavedUtc }) {
   const label =
     status === "saving"
@@ -2439,21 +2503,6 @@ function SaveBadge({ status, lastSavedUtc }) {
       title={label}
     >
       {label}
-      <RowCommentsModal
-        open={!!commentsRowId}
-        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
-        person={commentPerson}
-        setPerson={setCommentPerson}
-        text={commentText}
-        setText={setCommentText}
-        onClose={closeRowComments}
-        onAdd={() => {
-          if (!commentsRowId) return;
-          addCommentToRow(commentsRowId, commentPerson, commentText);
-          setCommentText("");
-        }}
-      />
-
     </div>
   );
 }
@@ -2472,21 +2521,6 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
       }}
     >
       {empty ? "—" : value}
-      <RowCommentsModal
-        open={!!commentsRowId}
-        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
-        person={commentPerson}
-        setPerson={setCommentPerson}
-        text={commentText}
-        setText={setCommentText}
-        onClose={closeRowComments}
-        onAdd={() => {
-          if (!commentsRowId) return;
-          addCommentToRow(commentsRowId, commentPerson, commentText);
-          setCommentText("");
-        }}
-      />
-
     </div>
   );
 }
@@ -2507,21 +2541,6 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
         {empty ? "—" : value}
       </div>
       <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
-      <RowCommentsModal
-        open={!!commentsRowId}
-        row={(activePage?.rows || []).find((r) => r.id === commentsRowId) || null}
-        person={commentPerson}
-        setPerson={setCommentPerson}
-        text={commentText}
-        setText={setCommentText}
-        onClose={closeRowComments}
-        onAdd={() => {
-          if (!commentsRowId) return;
-          addCommentToRow(commentsRowId, commentPerson, commentText);
-          setCommentText("");
-        }}
-      />
-
     </div>
   );
 }
@@ -2542,94 +2561,6 @@ function FilterPill({ label, active, onClick }) {
   );
 }
 
-
-function CommentsModal({ open, row, person, setPerson, text, setText, onAdd, onClose }) {
-  if (!open) return null;
-  const comments = row?.comments || [];
-  const title = row?.item ? `Comments — ${row.item}` : "Comments";
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(17,24,39,0.45)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 16,
-        zIndex: 1000,
-      }}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: "min(900px, 100%)",
-          background: "#FFFFFF",
-          borderRadius: 18,
-          border: "1px solid #E5E7EB",
-          boxShadow: "0 20px 70px rgba(17,24,39,0.25)",
-          overflow: "hidden",
-        }}
-      >
-        <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
-        >
-          <div>
-            <div style={{ fontWeight: 900, fontSize: 14 }}>{title}</div>
-            <div style={{ color: "#6B7280", fontSize: 12 }}>{comments.length ? `${comments.length} comment(s)` : "No comments yet"}</div>
-          </div>
-          <button style={styles.secondaryBtn} onClick={onClose}>Close</button>
-        </div>
-
-        <div style={{ padding: 14, display: "grid", gap: 10 }}
-        >
-          <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 10, alignItems: "start" }}
-          >
-            <label style={styles.label}>
-              Person
-              <input style={styles.input} value={person} onChange={(e) => setPerson(e.target.value)} placeholder="Name" />
-            </label>
-            <label style={styles.label}>
-              Comment
-              <textarea
-                style={{ ...styles.input, minHeight: 80, resize: "vertical" }}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Add a note…"
-              />
-            </label>
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
-          >
-            <button style={styles.primaryBtn} onClick={onAdd} disabled={!person.trim() || !text.trim()}>
-              Add comment
-            </button>
-          </div>
-
-          <div style={{ border: "1px solid #E5E7EB", borderRadius: 14, overflow: "hidden" }}
-          >
-            <div style={{ maxHeight: 300, overflow: "auto" }}
-            >
-              {(comments.slice().reverse()).map((c) => (
-                <div key={c.id || `${c.date}-${c.person}`} style={{ padding: 12, borderBottom: "1px solid #F3F4F6" }}>
-                  <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                    <div style={{ fontWeight: 900 }}>{c.person || ""}</div>
-                    <div style={{ color: "#6B7280", fontSize: 12 }}>{c.date ? new Date(c.date).toLocaleString() : ""}</div>
-                  </div>
-                  <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{c.text || ""}</div>
-                </div>
-              ))}
-              {!comments.length ? <div style={{ padding: 12, color: "#6B7280" }}>No comments yet.</div> : null}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 /* ---------- styles ---------- */
 const MAX_W = 1320;
 const TEAL = "#0D9488";
@@ -2719,6 +2650,34 @@ const styles = {
   thTf: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 8px", borderBottom: "1px solid #E5E7EB", width: 120 },
 
   tdCenter: { padding: "10px 8px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", textAlign: "center" },
+
+  // modal
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(17,24,39,0.5)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 50,
+  },
+  modalCard: {
+    width: "min(560px, 100%)",
+    background: "#FFFFFF",
+    border: "1px solid #E5E7EB",
+    borderRadius: 16,
+    padding: 14,
+    boxShadow: "0 18px 50px rgba(17,24,39,0.25)",
+  },
+
+  // comments (Design Responsibilities)
+  commentsPanel: { display: "grid", gap: 10 },
+  commentsHeader: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" },
+  commentsForm: { display: "grid", gap: 10, gridTemplateColumns: "minmax(200px, 260px) 1fr auto", alignItems: "end" },
+  commentList: { display: "grid", gap: 10 },
+  commentItem: { border: "1px solid #E5E7EB", borderRadius: 14, padding: 10, background: "#FFFFFF" },
+  commentMeta: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 },
 
   trHeader: { background: "#F9FAFB" },
   trLate: { background: "#FEF2F2" },

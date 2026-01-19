@@ -16,6 +16,14 @@ function findRowRef(state, rowId) {
 
 const ALLOWED_FIELDS = ["completed", "notRequired", "statusADone", "firstIssueDone"];
 
+function uid() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function userLabel(me) {
+  return (me && (me.name || me.email || me.userId)) || "Unknown";
+}
+
 app.http("rowTick", {
   route: "rows/{rowId}/tick",
   methods: ["PATCH"],
@@ -45,20 +53,56 @@ app.http("rowTick", {
       const ok = roleNorm === "tickonly" || roleNorm === "checkbox" || roleNorm === "editor" || roleNorm === "admin" || roleNorm === "owner";
       if (!ok) return { status: 403, jsonBody: { error: "forbidden" } };
 
-      const updatedRow = { ...ref.rows[ref.idx] };
-      for (const k of keys) updatedRow[k] = !!patch[k];
+      const isAdmin = roleNorm === "admin" || roleNorm === "owner";
+      const now = new Date().toISOString();
+      const by = userLabel(me);
 
-      // If Not Required is set, clear other checkmarks
+      const updatedRow = { ...ref.rows[ref.idx] };
+      updatedRow.locks = updatedRow.locks && typeof updatedRow.locks === "object" ? updatedRow.locks : {};
+      updatedRow.auditTrail = Array.isArray(updatedRow.auditTrail) ? updatedRow.auditTrail : [];
+
+      for (const k of keys) {
+        const nextVal = !!patch[k];
+        const locked = !!updatedRow.locks?.[k]?.locked;
+
+        if (!nextVal && locked) {
+          // Unlock request
+          if (!isAdmin) return { status: 403, jsonBody: { error: "locked" } };
+          updatedRow[k] = false;
+          delete updatedRow.locks[k];
+          updatedRow.auditTrail.unshift({ id: uid(), at: now, by, action: "unlock", field: k, value: false });
+          continue;
+        }
+
+        updatedRow[k] = nextVal;
+
+        if (nextVal) {
+          // Lock on tick
+          updatedRow.locks[k] = { locked: true, by, at: now };
+          updatedRow.auditTrail.unshift({ id: uid(), at: now, by, action: "tick", field: k, value: true });
+        } else {
+          updatedRow.auditTrail.unshift({ id: uid(), at: now, by, action: "untick", field: k, value: false });
+        }
+      }
+
+      // If Not Required is set, clear other checkmarks + remove locks
       if (updatedRow.notRequired) {
-        updatedRow.completed = false;
-        updatedRow.statusADone = false;
-        updatedRow.firstIssueDone = false;
+        for (const f of ["completed", "statusADone", "firstIssueDone"]) {
+          if (updatedRow[f]) {
+            updatedRow[f] = false;
+            delete updatedRow.locks[f];
+            updatedRow.auditTrail.unshift({ id: uid(), at: now, by, action: "auto_clear", field: f, value: false, note: "Not required" });
+          } else {
+            // still remove lock if present
+            if (updatedRow.locks?.[f]?.locked) delete updatedRow.locks[f];
+          }
+        }
       }
 
       ref.rows[ref.idx] = updatedRow;
 
       await writeAppState(state);
-      return { status: 200, jsonBody: { ok: true } };
+      return { status: 200, jsonBody: { ok: true, row: updatedRow } };
     } catch (e) {
       context.error(e);
       return { status: 500, jsonBody: { error: "tick_failed" } };
