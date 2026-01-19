@@ -243,6 +243,9 @@ function defaultRow(kind = "item") {
     notRequired: false,
     statusADone: false,
     firstIssueDone: false,
+    // Comments per row (tracker pages)
+    // [{ id, name, dateISO, text }]
+    comments: [],
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
 }
@@ -426,10 +429,7 @@ function ProgrammeGantt({ master, dense = false }) {
             <div style={styles.ganttChartCol}>
               <div style={styles.ganttLane}>
                 {hasDates ? (
-                  <div
-                    style={{ ...styles.ganttBar, left: `${left}%`, width: `${width}%` }}
-                    title={`${it.startISO || "—"} → ${it.finishISO || "—"}`}
-                  />
+                  <div style={{ ...styles.ganttBar, left: `${left}%`, width: `${width}%` }} title={`${it.startISO || "—"} → ${it.finishISO || "—"}`} />
                 ) : (
                   <div style={styles.ganttBarMissing}>No dates</div>
                 )}
@@ -466,37 +466,7 @@ export default function App() {
   const [activePageId, setActivePageId] = useState(null);
 
   const [view, setView] = useState(VIEW.LANDING);
-
-  // refs
   const didHydrateRef = useRef(false);
-  const saveTimerRef = useRef(null);
-
-  // server save UX
-  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
-  const [lastSavedUtc, setLastSavedUtc] = useState(null);
-
-  // per-page row search
-  const [rowSearch, setRowSearch] = useState("");
-
-  // ---------- server state helpers ----------
-  async function loadStateFromServer() {
-    const r = await fetch("/api/state", { method: "GET" });
-    const data = await r.json();
-    return data?.state ?? null;
-  }
-
-  async function saveStateToServer(payload) {
-    await fetch("/api/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: payload }),
-    });
-  }
-
-  // effects come AFTER this
-  // useEffect(...)
-
-
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -519,6 +489,19 @@ export default function App() {
   const [chatBusy, setChatBusy] = useState(false);
   const [chatStatus, setChatStatus] = useState("idle"); // "idle" | "checking" | "ok" | "error"
   const chatEndRef = useRef(null);
+  const CHAT_WELCOME = {
+    role: "assistant",
+    content:
+      "Ask me about your programme data. Examples:\n• What is overdue next?\n• Which supplier has the most overdue items?\n• What are the next Status A dates in Project 1?",
+  };
+
+  function resetChat() {
+    setChatMessages([CHAT_WELCOME]);
+    setChatInput("");
+    setChatBusy(false);
+    setChatStatus("idle");
+  }
+
 
   useEffect(() => {
     if (!chatOpen) return;
@@ -531,24 +514,23 @@ export default function App() {
     }, 0);
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
-  
-/* ---- load (from server / Blob via /api/state) ---- */
-useEffect(() => {
-  (async () => {
-    try {
-      const parsed = await loadStateFromServer();
 
-      // No server state yet → allow app defaults
-      if (!parsed) {
+  /* ---- load ---- */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) {
         didHydrateRef.current = true;
         return;
       }
-
+  
+      const parsed = JSON.parse(raw);
+  
       if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
-      if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue))
-        setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
-
+      if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
+  
       if (Array.isArray(parsed.projects) && parsed.projects.length) {
+        // your hydration logic (keep as-is)
         const hydrated = parsed.projects.map((proj) => {
           const master =
             Array.isArray(proj.master) && proj.master.length
@@ -566,7 +548,7 @@ useEffect(() => {
                       : [defaultLevel("Level 1")],
                 }))
               : [defaultMasterRow()];
-
+  
           const responsibilities =
             Array.isArray(proj.responsibilities) && proj.responsibilities.length
               ? proj.responsibilities.map((r) => ({
@@ -575,13 +557,13 @@ useEffect(() => {
                   supplier: r.supplier || "",
                 }))
               : [defaultResponsibility()];
-
+  
           const pages =
             Array.isArray(proj.pages) && proj.pages.length
               ? proj.pages.map((pg) => {
                   const rawName = pg.name || "Untitled Page";
                   const migratedName = pg.meta?.isMaster && rawName === "Master" ? "Project Home" : rawName;
-
+  
                   return {
                     id: pg.id || uid(),
                     name: migratedName,
@@ -595,6 +577,7 @@ useEffect(() => {
                           notRequired: !!r.notRequired,
                           statusADone: !!r.statusADone,
                           firstIssueDone: !!r.firstIssueDone,
+                          comments: Array.isArray(r.comments) ? r.comments : [],
                           meta: {
                             generated: !!r?.meta?.generated,
                             blockZone: r?.meta?.blockZone || "",
@@ -612,8 +595,7 @@ useEffect(() => {
                   };
                 })
               : [];
-
-          // Ensure master page exists
+  
           if (!pages.some((p) => p.meta?.isMaster)) {
             pages.unshift({
               id: uid(),
@@ -622,20 +604,20 @@ useEffect(() => {
               meta: { generated: false, responsibilityId: null, isMaster: true },
             });
           }
-
+  
           return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
         });
-
+  
         setProjects(hydrated);
-
+  
         const pid = parsed.activeProjectId || hydrated[0].id;
         setActiveProjectId(pid);
-
+  
         const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
         const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
         setActivePageId(parsed.activePageId || masterPg.id);
       }
-
+  
       if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
       if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
       if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
@@ -643,17 +625,35 @@ useEffect(() => {
     } catch {
       // ignore
     } finally {
-      // ✅ only start saving AFTER hydration attempt finishes
+      // ✅ only start saving AFTER we've attempted hydration
       didHydrateRef.current = true;
     }
-  })();
-}, []);
+  }, []);
+  
 
-/* ---- persist (to server / Blob via /api/state) ---- */
-useEffect(() => {
-  if (!didHydrateRef.current) return;
-
-  const payload = {
+  /* ---- persist ---- */
+  useEffect(() => {
+    // ✅ prevent overwriting saved data on the first render
+    if (!didHydrateRef.current) return;
+  
+    const payload = {
+      globalDaysReqToStatusA,
+      globalDaysStatusAToFirstIssue,
+      projects,
+      activeProjectId,
+      activePageId,
+      view,
+      summaryFilter,
+      summaryProjectId,
+      summarySupplier,
+    };
+  
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  }, [
     globalDaysReqToStatusA,
     globalDaysStatusAToFirstIssue,
     projects,
@@ -663,81 +663,38 @@ useEffect(() => {
     summaryFilter,
     summaryProjectId,
     summarySupplier,
-  };
-
-  // Optional: keep local cache too (handy if server is down)
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(payload));
-  } catch {
-    // ignore
-  }
-
-  // Debounce server saves
-  if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-
-  saveTimerRef.current = setTimeout(() => {
-    setSaveStatus("saving");
-    saveStateToServer(payload)
-      .then(() => {
-        setSaveStatus("saved");
-        setLastSavedUtc(new Date().toISOString());
-      })
-      .catch(() => {
-        setSaveStatus("error");
-      });
-  }, 600);
-
-  return () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-  };
-}, [
-  globalDaysReqToStatusA,
-  globalDaysStatusAToFirstIssue,
-  projects,
-  activeProjectId,
-  activePageId,
-  view,
-  summaryFilter,
-  summaryProjectId,
-  summarySupplier,
-]);
-
-
-  /* ---- derived active project/page (CLEAN + SAFE) ---- */
-  const activeProject = useMemo(() => {
-    if (!projects?.length) return null;
-    return projects.find((p) => p.id === activeProjectId) || projects[0] || null;
-  }, [projects, activeProjectId]);
+  ]);
+  
+  /* ---- derived active project/page ---- */
+  const activeProject = useMemo(
+    () => projects.find((p) => p.id === (activeProjectId || projects[0]?.id)) || projects[0] || null,
+    [projects, activeProjectId]
+  );
 
   const activePage = useMemo(() => {
-    if (!activeProject?.pages?.length) return null;
-    return activeProject.pages.find((pg) => pg.id === activePageId) || activeProject.pages[0] || null;
+    if (!activeProject) return null;
+    return (
+      activeProject.pages.find((pg) => pg.id === (activePageId || activeProject.pages[0]?.id)) ||
+      activeProject.pages[0] ||
+      null
+    );
   }, [activeProject, activePageId]);
 
-  // ✅ Self-heal active IDs if null/invalid (prevents “can’t type / buttons don’t work”)
+  // Ensure we always have valid active IDs
   useEffect(() => {
-    if (!projects?.length) return;
+    if (!projects.length) return;
+    if (!activeProjectId) setActiveProjectId(projects[0].id);
+  }, [projects, activeProjectId]);
 
-    const projectValid = projects.some((p) => p.id === activeProjectId);
-    if (!projectValid) {
-      const p0 = projects[0];
-      setActiveProjectId(p0.id);
-      const mp = p0.pages?.find((p) => p.meta?.isMaster) || p0.pages?.[0] || null;
-      setActivePageId(mp?.id || null);
-      return;
-    }
-
-    const proj = projects.find((p) => p.id === activeProjectId);
-    if (!proj?.pages?.length) return;
-
-    const pageValid = proj.pages.some((pg) => pg.id === activePageId);
-    if (!pageValid) {
-      const mp = proj.pages.find((p) => p.meta?.isMaster) || proj.pages[0];
+  useEffect(() => {
+    if (!activeProject) return;
+    if (!activePageId) {
+      const mp = activeProject.pages.find((p) => p.meta?.isMaster) || activeProject.pages[0];
       setActivePageId(mp?.id || null);
     }
-  }, [projects, activeProjectId, activePageId]);
+  }, [activeProject, activePageId]);
 
-  /* ---- update helpers (single source of truth) ---- */
+  /* ---- update helpers ---- */
   function updateProject(projectId, patch) {
     setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...patch } : p)));
   }
@@ -749,7 +706,7 @@ useEffect(() => {
           ? p
           : {
               ...p,
-              pages: (p.pages || []).map((pg) => (pg.id === pageId ? { ...pg, ...patch } : pg)),
+              pages: p.pages.map((pg) => (pg.id === pageId ? { ...pg, ...patch } : pg)),
             }
       )
     );
@@ -764,7 +721,7 @@ useEffect(() => {
 
         return {
           ...p,
-          pages: (p.pages || []).map((pg) =>
+          pages: p.pages.map((pg) =>
             pg.id !== activePage.id
               ? pg
               : {
@@ -1225,18 +1182,6 @@ useEffect(() => {
     }
   }
 
-  function resetChat() {
-    setChatMessages([
-      {
-        role: "assistant",
-        content:
-          "Ask me about your programme data. Examples:\n• What is overdue next?\n• Which supplier has the most overdue items?\n• What are the next Status A dates in Project 1?",
-      },
-    ]);
-    setChatInput("");
-    setChatStatus("idle");
-  }
-
   /* ---------- VIEW: LANDING ---------- */
   if (view === VIEW.LANDING) {
     return (
@@ -1544,10 +1489,6 @@ useEffect(() => {
           updatePage={updatePage}
           updateRow={updateRow}
           computedRows={computedRows}
-          rowSearch={rowSearch}
-          setRowSearch={setRowSearch}
-          saveStatus={saveStatus}
-          lastSavedUtc={lastSavedUtc}
           addProject={addProject}
           addMasterRow={addMasterRow}
           updateMasterRow={updateMasterRow}
@@ -1597,10 +1538,7 @@ function ProjectView(props) {
     updateProject,
     updateRow,
     computedRows,
-    rowSearch,
-    setRowSearch,
-    saveStatus,
-    lastSavedUtc,
+    addProject,
     addMasterRow,
     updateMasterRow,
     removeMasterRow,
@@ -1621,16 +1559,43 @@ function ProjectView(props) {
     VIEW,
   } = props;
 
-  const visibleRows = useMemo(() => {
-    const q = String(rowSearch || "").trim().toLowerCase();
-    if (!q) return computedRows;
-    return (computedRows || []).filter((r) => {
-      if (r.kind === "header") return true;
-      const blob = `${r.item || ""} ${r._computed?.requiredOnSite || ""} ${r._computed?.statusA || ""} ${r._computed?.firstIssue || ""}`.toLowerCase();
-      return blob.includes(q);
-    });
-  }, [computedRows, rowSearch]);
+  // ----- Row comments (tracker pages) -----
+  const [commentModal, setCommentModal] = useState({
+    open: false,
+    rowId: null,
+    name: "",
+    text: "",
+  });
 
+  const activeCommentRow = useMemo(() => {
+    if (!commentModal.open || !commentModal.rowId) return null;
+    return (activePage?.rows || []).find((r) => r.id === commentModal.rowId) || null;
+  }, [commentModal.open, commentModal.rowId, activePage?.rows]);
+
+  function openComments(rowId) {
+    setCommentModal({ open: true, rowId, name: "", text: "" });
+  }
+
+  function closeComments() {
+    setCommentModal({ open: false, rowId: null, name: "", text: "" });
+  }
+
+  function saveComment() {
+    const rowId = commentModal.rowId;
+    const name = clean(commentModal.name);
+    const text = clean(commentModal.text);
+    if (!rowId || !name || !text) return;
+
+    const todayISO = isoToday();
+    const newComment = { id: uid(), name, dateISO: todayISO, text };
+
+    const row = (activePage?.rows || []).find((r) => r.id === rowId) || null;
+    const existing = Array.isArray(row?.comments) ? row.comments : [];
+    updateRow(rowId, { comments: [...existing, newComment] });
+    closeComments();
+  }
+
+  // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
       <div style={styles.selectorBlock}>
@@ -1670,10 +1635,6 @@ function ProjectView(props) {
           ))}
         </select>
       </div>
-
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "flex-end", paddingBottom: 2 }}>
-        <SaveBadge status={saveStatus} lastSavedUtc={lastSavedUtc} />
-      </div>
     </div>
   );
 
@@ -1697,6 +1658,7 @@ function ProjectView(props) {
         </div>
       </div>
 
+      {/* ✅ always left aligned, and ✅ NO "+ Project" here */}
       <div style={styles.card}>
         <SelectorBar />
         <div style={{ marginTop: 10 }}>
@@ -1709,6 +1671,7 @@ function ProjectView(props) {
         </div>
       </div>
 
+      {/* Defaults (hidden on Project Home) */}
       {!isMasterPage ? (
         <div style={styles.card}>
           <div style={styles.cardHeader}>
@@ -1740,6 +1703,7 @@ function ProjectView(props) {
         </div>
       ) : null}
 
+      {/* Project Home */}
       {isMasterPage ? (
         <div style={styles.card}>
           <div style={styles.tableTop}>
@@ -1937,6 +1901,7 @@ function ProjectView(props) {
           </div>
         </div>
       ) : (
+        /* Tracker Page */
         <div style={styles.card}>
           <div style={styles.tableTop}>
             <div>
@@ -1946,25 +1911,9 @@ function ProjectView(props) {
                 <TrafficKeyDotsOnly />
               </div>
             </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <input
-                style={{ ...styles.input, width: 260 }}
-                placeholder="Search rows..."
-                value={rowSearch}
-                onChange={(e) => setRowSearch(e.target.value)}
-              />
-              <button
-                style={styles.secondaryBtn}
-                onClick={() => setRowSearch("")}
-                disabled={!rowSearch}
-                title="Clear search"
-              >
-                Clear
-              </button>
-              <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
-                + Manual row
-              </button>
-            </div>
+            <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
+              + Manual row
+            </button>
           </div>
 
           <div style={styles.tableWrap}>
@@ -1981,11 +1930,12 @@ function ProjectView(props) {
                   <th style={styles.thMed}>Status A</th>
                   <th style={styles.thMed}>First</th>
                   <th style={styles.thTf}>TF</th>
+                  <th style={styles.thSmall}>💬</th>
                   <th style={styles.thSmall}></th>
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((r) => {
+                {computedRows.map((r) => {
                   const rowStyle =
                     r.kind === "header"
                       ? styles.trHeader
@@ -2073,13 +2023,7 @@ function ProjectView(props) {
                       </td>
 
                       <td style={styles.td}>
-                        <DatePill
-                          value={r._computed.requiredOnSite}
-                          isHeader={r.kind === "header"}
-                          overdue={!!r._overdue?.overdueReq}
-                          done={r.completed}
-                          muted={r.notRequired}
-                        />
+                        <DatePill value={r._computed.requiredOnSite} isHeader={r.kind === "header"} overdue={!!r._overdue?.overdueReq} done={r.completed} muted={r.notRequired} />
                       </td>
 
                       <td style={styles.td}>
@@ -2115,11 +2059,7 @@ function ProjectView(props) {
                               min={0}
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
-                              onChange={(e) =>
-                                updateRow(r.id, {
-                                  overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0),
-                                })
-                              }
+                              onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
                               disabled={r.notRequired}
                               title="Req→A"
                             />
@@ -2129,15 +2069,23 @@ function ProjectView(props) {
                               min={0}
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
-                              onChange={(e) =>
-                                updateRow(r.id, {
-                                  overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0),
-                                })
-                              }
+                              onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
                               disabled={r.notRequired}
                               title="A→First"
                             />
                           </div>
+                        )}
+                      </td>
+
+                      <td style={styles.tdCenter}>
+                        {r.kind === "header" ? null : (
+                          <button
+                            style={styles.commentBtn}
+                            onClick={() => openComments(r.id)}
+                            title="Add / view comments"
+                          >
+                            💬 <span style={styles.commentCount}>{Array.isArray(r.comments) ? r.comments.length : 0}</span>
+                          </button>
                         )}
                       </td>
 
@@ -2154,6 +2102,97 @@ function ProjectView(props) {
               </tbody>
             </table>
           </div>
+
+          {/* Comments modal (with history) */}
+          {commentModal.open ? (
+            <div style={styles.modalOverlay} onMouseDown={closeComments}>
+              <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontWeight: 900, fontSize: 14 }}>Comments</div>
+                    <div style={styles.muted}>{activePage?.name || ""}</div>
+                  </div>
+                  <button style={styles.iconBtn} onClick={closeComments} title="Close">
+                    ✕
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                  {/* History */}
+                  <div style={styles.commentHistoryBox}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <div style={{ fontWeight: 800, fontSize: 12 }}>History</div>
+                      <div style={styles.muted}>
+                        {Array.isArray(activeCommentRow?.comments) ? activeCommentRow.comments.length : 0} total
+                      </div>
+                    </div>
+
+                    <div style={styles.commentHistoryList}>
+                      {Array.isArray(activeCommentRow?.comments) && activeCommentRow.comments.length ? (
+                        activeCommentRow.comments
+                          .slice()
+                          .sort((a, b) => String(b.dateISO || "").localeCompare(String(a.dateISO || "")))
+                          .map((c) => (
+                            <div key={c.id || `${c.name}-${c.dateISO}-${c.text}`} style={styles.commentItem}>
+                              <div style={styles.commentMeta}>
+                                <span style={{ fontWeight: 900 }}>{c.name || "—"}</span>
+                                <span style={styles.commentMetaSep}>•</span>
+                                <span>{c.dateISO || "—"}</span>
+                              </div>
+                              <div style={styles.commentText}>{c.text || ""}</div>
+                            </div>
+                          ))
+                      ) : (
+                        <div style={styles.muted}>No comments yet.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Add new */}
+                  <div style={styles.commentFormGrid}>
+                    <label style={styles.label}>
+                      Name
+                      <input
+                        style={styles.input}
+                        value={commentModal.name}
+                        onChange={(e) => setCommentModal((s) => ({ ...s, name: e.target.value }))}
+                        placeholder="Your name"
+                      />
+                    </label>
+
+                    <label style={styles.label}>
+                      Date
+                      <input style={styles.inputMutedReadOnly} value={isoToday()} readOnly />
+                    </label>
+                  </div>
+
+                  <label style={styles.label}>
+                    Comment
+                    <textarea
+                      style={styles.textarea}
+                      value={commentModal.text}
+                      onChange={(e) => setCommentModal((s) => ({ ...s, text: e.target.value }))}
+                      placeholder="Write a comment..."
+                      rows={4}
+                    />
+                  </label>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                    <button style={styles.secondaryBtn} onClick={closeComments}>
+                      Close
+                    </button>
+                    <button
+                      style={styles.primaryBtn}
+                      onClick={saveComment}
+                      disabled={!clean(commentModal.name) || !clean(commentModal.text)}
+                    >
+                      Save comment
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
@@ -2161,40 +2200,6 @@ function ProjectView(props) {
 }
 
 /* ---------- small components ---------- */
-function SaveBadge({ status, lastSavedUtc }) {
-  const label =
-    status === "saving"
-      ? "Saving…"
-      : status === "saved"
-      ? `Saved${lastSavedUtc ? ` • ${new Date(lastSavedUtc).toLocaleString()}` : ""}`
-      : status === "error"
-      ? "Offline / not saved"
-      : "";
-
-  if (!label) return null;
-
-  const bg = status === "error" ? "#FEF2F2" : status === "saving" ? "#FFFBEB" : "#ECFDF5";
-  const border = status === "error" ? "#FCA5A5" : status === "saving" ? "#FCD34D" : "#6EE7B7";
-  const color = status === "error" ? "#991B1B" : status === "saving" ? "#92400E" : "#065F46";
-
-  return (
-    <div
-      style={{
-        fontSize: 12,
-        padding: "6px 10px",
-        borderRadius: 999,
-        border: `1px solid ${border}`,
-        background: bg,
-        color,
-        whiteSpace: "nowrap",
-      }}
-      title={label}
-    >
-      {label}
-    </div>
-  );
-}
-
 function DatePill({ value, isHeader, overdue, done, muted }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
   const empty = !value;
@@ -2362,6 +2367,35 @@ const styles = {
   smallBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
   iconBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer" },
 
+  commentBtn: {
+    background: "#FFFFFF",
+    color: "#111827",
+    border: "1px solid #D1D5DB",
+    borderRadius: 12,
+    padding: "8px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+    fontWeight: 900,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    minWidth: 62,
+  },
+  commentCount: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 18,
+    height: 18,
+    padding: "0 6px",
+    borderRadius: 999,
+    border: "1px solid #E5E7EB",
+    background: "#F9FAFB",
+    fontSize: 12,
+    fontWeight: 900,
+  },
+
   badgeBase: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 900, border: "1px solid transparent", whiteSpace: "nowrap" },
   badgeOverdue: { background: "#FEF2F2", color: "#991B1B", borderColor: "#FCA5A5" },
   badgeOngoing: { background: "#FFFBEB", color: "#92400E", borderColor: "#FDE68A" },
@@ -2393,6 +2427,7 @@ const styles = {
   ganttBar: { position: "absolute", top: 6, height: 16, borderRadius: 999, background: "#111827" },
   ganttBarMissing: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#9CA3AF" },
 
+
   /* --- Fullscreen programme summary --- */
   fullscreen: { position: "fixed", inset: 0, background: "#F8FAFC", display: "flex", flexDirection: "column" },
   fullTopBar: { padding: 12, background: "#FFFFFF", borderBottom: "1px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
@@ -2402,4 +2437,77 @@ const styles = {
   projectHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 },
   projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
   projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
+
+  // --- Comments modal ---
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(17,24,39,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 9999,
+  },
+  modalCard: {
+    width: "min(720px, 100%)",
+    background: "#FFFFFF",
+    border: "1px solid #E5E7EB",
+    borderRadius: 16,
+    padding: 14,
+    boxShadow: "0 20px 60px rgba(17,24,39,0.2)",
+  },
+  textarea: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #D1D5DB",
+    borderRadius: 12,
+    padding: "10px 10px",
+    fontSize: 12,
+    outline: "none",
+    background: "#FFFFFF",
+    resize: "vertical",
+  },
+  inputMutedReadOnly: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #E5E7EB",
+    borderRadius: 12,
+    padding: "8px 10px",
+    fontSize: 12,
+    outline: "none",
+    background: "#F3F4F6",
+    color: "#6B7280",
+  },
+  commentHistoryBox: {
+    border: "1px solid #E5E7EB",
+    borderRadius: 14,
+    padding: 10,
+    background: "#FFFFFF",
+  },
+  commentHistoryList: {
+    marginTop: 8,
+    display: "grid",
+    gap: 8,
+    maxHeight: 220,
+    overflow: "auto",
+    paddingRight: 4,
+  },
+  commentItem: {
+    border: "1px solid #F3F4F6",
+    borderRadius: 12,
+    padding: 10,
+    background: "#FAFAFA",
+  },
+  commentMeta: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 12,
+    color: "#374151",
+    marginBottom: 6,
+  },
+  commentMetaSep: { color: "#9CA3AF" },
+  commentText: { fontSize: 12, color: "#111827", whiteSpace: "pre-wrap", wordBreak: "break-word" },
+  commentFormGrid: { display: "grid", gap: 10, gridTemplateColumns: "1fr 180px" },
 };
