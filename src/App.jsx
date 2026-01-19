@@ -245,6 +245,7 @@ function defaultRow(kind = "item") {
     firstIssueDone: false,
     locks: {}, // { [field]: { locked: true, by: string, at: string } }
     auditTrail: [], // { id, at, by, action, field, value }
+    comments: [], // { id, dateISO, person, comment }
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
 }
@@ -489,10 +490,10 @@ export default function App() {
   // { rowId, patch, message }
   const [tickBusy, setTickBusy] = useState(false);
 
-  // Design Responsibilities comments UI
-  const [openResponsibilityId, setOpenResponsibilityId] = useState(null);
-  const [respCommentPerson, setRespCommentPerson] = useState("");
-  const [respCommentText, setRespCommentText] = useState("");
+  // Row comments (Design Tracker page)
+  const [openRowCommentId, setOpenRowCommentId] = useState(null);
+  const [rowCommentPerson, setRowCommentPerson] = useState("");
+  const [rowCommentText, setRowCommentText] = useState("");
 
   // ---------- server state helpers ----------
   async function loadStateFromServer() {
@@ -643,6 +644,7 @@ useEffect(() => {
                           notRequired: !!r.notRequired,
                           statusADone: !!r.statusADone,
                           firstIssueDone: !!r.firstIssueDone,
+                          comments: Array.isArray(r.comments) ? r.comments : [],
                           meta: {
                             generated: !!r?.meta?.generated,
                             blockZone: r?.meta?.blockZone || "",
@@ -2114,122 +2116,34 @@ function ProjectView(props) {
                   <tr>
                     <th style={styles.th}>Responsibility (page name)</th>
                     <th style={styles.th}>Supplier</th>
-                    <th style={styles.th}>Comments</th>
                     <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {(activeProject?.responsibilities || []).map((r) => (
-                    <React.Fragment key={r.id}>
-                      <tr>
-                        <td style={styles.td}>
+                    <tr key={r.id}>
+                      <td style={styles.td}>
                         <input
                           style={styles.input}
                           placeholder="e.g. MSA / NCCT / Stone"
                           value={r.name}
                           onChange={(e) => updateResponsibility(r.id, { name: e.target.value })}
                         />
-                        </td>
-                        <td style={styles.td}>
+                      </td>
+                      <td style={styles.td}>
                         <input
                           style={styles.input}
                           placeholder="e.g. ABC Consultants"
                           value={r.supplier || ""}
                           onChange={(e) => updateResponsibility(r.id, { supplier: e.target.value })}
                         />
-                        </td>
-                        <td style={styles.td}>
-                          <button
-                            style={styles.smallBtn}
-                            onClick={() => {
-                              setOpenResponsibilityId((prev) => (prev === r.id ? null : r.id));
-                              setRespCommentPerson(currentUserLabel());
-                              setRespCommentText("");
-                            }}
-                          >
-                            {openResponsibilityId === r.id ? "Hide" : "Comments"} ({(r.comments || []).length || 0})
-                          </button>
-                        </td>
-                        <td style={styles.td}>
+                      </td>
+                      <td style={styles.td}>
                         <button style={styles.iconBtn} onClick={() => removeResponsibility(r.id)} title="Remove">
                           ✕
                         </button>
-                        </td>
-                      </tr>
-
-                      {openResponsibilityId === r.id ? (
-                        <tr>
-                          <td style={styles.td} colSpan={4}>
-                            <div style={styles.commentsPanel}>
-                              <div style={styles.commentsHeader}>
-                                <div style={{ fontWeight: 700 }}>Comments</div>
-                                <div style={styles.muted}>Date · Person · Comment</div>
-                              </div>
-
-                              <div style={styles.commentsForm}>
-                                <label style={styles.label}>
-                                  Person
-                                  <input
-                                    style={styles.input}
-                                    value={respCommentPerson}
-                                    onChange={(e) => setRespCommentPerson(e.target.value)}
-                                    placeholder="Name"
-                                  />
-                                </label>
-                                <label style={styles.label}>
-                                  Comment
-                                  <textarea
-                                    style={{ ...styles.input, minHeight: 70, resize: "vertical" }}
-                                    value={respCommentText}
-                                    onChange={(e) => setRespCommentText(e.target.value)}
-                                    placeholder="Add a comment..."
-                                  />
-                                </label>
-                                <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-                                  <button
-                                    style={styles.primaryBtn}
-                                    onClick={() => {
-                                      const person = clean(respCommentPerson) || currentUserLabel();
-                                      const text = clean(respCommentText);
-                                      if (!text) return;
-                                      const next = [
-                                        {
-                                          id: uid(),
-                                          dateISO: isoToday(),
-                                          person,
-                                          comment: text,
-                                        },
-                                        ...(Array.isArray(r.comments) ? r.comments : []),
-                                      ];
-                                      updateResponsibility(r.id, { comments: next });
-                                      setRespCommentText("");
-                                    }}
-                                  >
-                                    + Add comment
-                                  </button>
-                                </div>
-                              </div>
-
-                              {(r.comments || []).length ? (
-                                <div style={styles.commentList}>
-                                  {(r.comments || []).map((c) => (
-                                    <div key={c.id || uid()} style={styles.commentItem}>
-                                      <div style={styles.commentMeta}>
-                                        <span style={styles.pillCompact}>{c.dateISO || "—"}</span>
-                                        <span style={{ fontWeight: 700 }}>{c.person || "—"}</span>
-                                      </div>
-                                      <div style={{ whiteSpace: "pre-wrap" }}>{c.comment || ""}</div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div style={styles.muted}>No comments yet.</div>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ) : null}
-                    </React.Fragment>
+                      </td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
@@ -2312,7 +2226,8 @@ function ProjectView(props) {
                   const disabled = r.completed || r.notRequired;
 
                   return (
-                    <tr key={r.id} style={rowStyle}>
+                    <React.Fragment key={r.id}>
+                      <tr style={rowStyle}>
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
                           <input
@@ -2455,12 +2370,99 @@ function ProjectView(props) {
 
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
-                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
-                            ✕
-                          </button>
+                          <div style={styles.inline}>
+                            <button
+                              style={styles.iconBtn}
+                              onClick={() => {
+                                setOpenRowCommentId((prev) => (prev === r.id ? null : r.id));
+                                setRowCommentPerson(currentUserLabel());
+                                setRowCommentText("");
+                              }}
+                              title={`Comments (${(r.comments || []).length || 0})`}
+                            >
+                              💬
+                            </button>
+                            <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
+                              ✕
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
+
+                    {openRowCommentId === r.id && r.kind !== "header" ? (
+                      <tr>
+                        <td style={styles.td} colSpan={11}>
+                          <div style={styles.commentsPanel}>
+                            <div style={styles.commentsHeader}>
+                              <div style={{ fontWeight: 700 }}>Comments</div>
+                              <div style={styles.muted}>Date · Person · Comment</div>
+                            </div>
+
+                            <div style={styles.commentsForm}>
+                              <label style={styles.label}>
+                                Person
+                                <input
+                                  style={styles.input}
+                                  value={rowCommentPerson}
+                                  onChange={(e) => setRowCommentPerson(e.target.value)}
+                                  placeholder="Name"
+                                />
+                              </label>
+                              <label style={styles.label}>
+                                Comment
+                                <textarea
+                                  style={{ ...styles.input, minHeight: 70, resize: "vertical" }}
+                                  value={rowCommentText}
+                                  onChange={(e) => setRowCommentText(e.target.value)}
+                                  placeholder="Add a comment..."
+                                />
+                              </label>
+                              <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                                <button
+                                  style={styles.primaryBtn}
+                                  onClick={() => {
+                                    const person = clean(rowCommentPerson) || currentUserLabel();
+                                    const text = clean(rowCommentText);
+                                    if (!text) return;
+                                    const next = [
+                                      {
+                                        id: uid(),
+                                        dateISO: isoToday(),
+                                        person,
+                                        comment: text,
+                                      },
+                                      ...(Array.isArray(r.comments) ? r.comments : []),
+                                    ];
+                                    updateRow(r.id, { comments: next });
+                                    setRowCommentText("");
+                                  }}
+                                >
+                                  + Add comment
+                                </button>
+                              </div>
+                            </div>
+
+                            {(r.comments || []).length ? (
+                              <div style={styles.commentList}>
+                                {(r.comments || []).map((c) => (
+                                  <div key={c.id || uid()} style={styles.commentItem}>
+                                    <div style={styles.commentMeta}>
+                                      <span style={styles.pillCompact}>{c.dateISO || "—"}</span>
+                                      <span style={{ fontWeight: 700 }}>{c.person || "—"}</span>
+                                    </div>
+                                    <div style={{ whiteSpace: "pre-wrap" }}>{c.comment || ""}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div style={styles.muted}>No comments yet.</div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
