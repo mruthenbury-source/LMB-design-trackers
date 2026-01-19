@@ -228,7 +228,7 @@ function defaultMasterRow() {
   return { id: uid(), blockZone: "", levels: [defaultLevel("Level 1")] };
 }
 function defaultResponsibility() {
-  return { id: uid(), name: "", supplier: "", comments: [] };
+  return { id: uid(), name: "", supplier: "" };
 }
 function defaultRow(kind = "item") {
   return {
@@ -243,9 +243,6 @@ function defaultRow(kind = "item") {
     notRequired: false,
     statusADone: false,
     firstIssueDone: false,
-    locks: {}, // { [field]: { locked: true, by: string, at: string } }
-    auditTrail: [], // { id, at, by, action, field, value }
-    comments: [], // { id, dateISO, person, comment }
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
 }
@@ -478,55 +475,22 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [lastSavedUtc, setLastSavedUtc] = useState(null);
 
-  // auth / permissions (from /api/bootstrap)
-  const [me, setMe] = useState({ authenticated: false, name: "", email: "", role: "viewer" });
-  const [rolesByPageId, setRolesByPageId] = useState({});
-
   // per-page row search
   const [rowSearch, setRowSearch] = useState("");
 
-  // tick confirmation / locking
-  const [tickDialog, setTickDialog] = useState(null);
-  // { rowId, patch, message }
-  const [tickBusy, setTickBusy] = useState(false);
-
-  // Row comments (Design Tracker page)
-  const [openRowCommentId, setOpenRowCommentId] = useState(null);
-  const [rowCommentPerson, setRowCommentPerson] = useState("");
-  const [rowCommentText, setRowCommentText] = useState("");
-
   // ---------- server state helpers ----------
   async function loadStateFromServer() {
-    const r = await fetch("/api/bootstrap", { method: "GET" });
-    if (!r.ok) throw new Error("bootstrap_failed");
-    const data = await r.json().catch(() => null);
-    return data || null;
+    const r = await fetch("/api/state", { method: "GET" });
+    const data = await r.json();
+    return data?.state ?? null;
   }
 
   async function saveStateToServer(payload) {
-    const r = await fetch("/api/save", {
+    await fetch("/api/state", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ state: payload }),
     });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err?.error || "save_failed");
-    }
-  }
-
-  async function tickRowOnServer(rowId, patch) {
-    const r = await fetch(`/api/rows/${encodeURIComponent(rowId)}/tick`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ patch }),
-    });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err?.error || "tick_failed");
-    }
-    const data = await r.json().catch(() => ({}));
-    return data?.row ?? null;
   }
 
   // effects come AFTER this
@@ -568,29 +532,17 @@ export default function App() {
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
   
-/* ---- load (from server via /api/bootstrap; fallback to local cache) ---- */
+/* ---- load (from server / Blob via /api/state) ---- */
 useEffect(() => {
   (async () => {
     try {
-      let parsed = await loadStateFromServer();
+      const parsed = await loadStateFromServer();
 
-      // If bootstrap fails or returns nothing, fallback to local cache
-      if (!parsed) {
-        try {
-          const cached = JSON.parse(localStorage.getItem(LS_KEY) || "null");
-          parsed = cached || null;
-        } catch {
-          parsed = null;
-        }
-      }
-
+      // No server state yet → allow app defaults
       if (!parsed) {
         didHydrateRef.current = true;
         return;
       }
-
-      if (parsed.me) setMe(parsed.me);
-      if (parsed.rolesByPageId) setRolesByPageId(parsed.rolesByPageId);
 
       if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
       if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue))
@@ -621,7 +573,6 @@ useEffect(() => {
                   id: r.id || uid(),
                   name: r.name || "",
                   supplier: r.supplier || "",
-                  comments: Array.isArray(r.comments) ? r.comments : [],
                 }))
               : [defaultResponsibility()];
 
@@ -644,7 +595,6 @@ useEffect(() => {
                           notRequired: !!r.notRequired,
                           statusADone: !!r.statusADone,
                           firstIssueDone: !!r.firstIssueDone,
-                          comments: Array.isArray(r.comments) ? r.comments : [],
                           meta: {
                             generated: !!r?.meta?.generated,
                             blockZone: r?.meta?.blockZone || "",
@@ -691,25 +641,7 @@ useEffect(() => {
       if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
       if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
     } catch {
-      // last resort fallback
-      try {
-        const cached = JSON.parse(localStorage.getItem(LS_KEY) || "null");
-        if (cached) {
-          if (cached.me) setMe(cached.me);
-          if (cached.rolesByPageId) setRolesByPageId(cached.rolesByPageId);
-          if (Number.isFinite(cached.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(cached.globalDaysReqToStatusA);
-          if (Number.isFinite(cached.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(cached.globalDaysStatusAToFirstIssue);
-          if (Array.isArray(cached.projects) && cached.projects.length) setProjects(cached.projects);
-          if (cached.activeProjectId) setActiveProjectId(cached.activeProjectId);
-          if (cached.activePageId) setActivePageId(cached.activePageId);
-          if (cached.view && Object.values(VIEW).includes(cached.view)) setView(cached.view);
-          if (typeof cached.summaryFilter === "string") setSummaryFilter(cached.summaryFilter);
-          if (typeof cached.summaryProjectId === "string") setSummaryProjectId(cached.summaryProjectId);
-          if (typeof cached.summarySupplier === "string") setSummarySupplier(cached.summarySupplier);
-        }
-      } catch {
-        // ignore
-      }
+      // ignore
     } finally {
       // ✅ only start saving AFTER hydration attempt finishes
       didHydrateRef.current = true;
@@ -717,12 +649,9 @@ useEffect(() => {
   })();
 }, []);
 
-/* ---- persist (to server via /api/save) ---- */
+/* ---- persist (to server / Blob via /api/state) ---- */
 useEffect(() => {
   if (!didHydrateRef.current) return;
-
-  const role = String(me?.role || "viewer").toLowerCase();
-  const canWrite = role === "admin" || role === "owner" || role === "editor";
 
   const payload = {
     globalDaysReqToStatusA,
@@ -734,8 +663,6 @@ useEffect(() => {
     summaryFilter,
     summaryProjectId,
     summarySupplier,
-    me,
-    rolesByPageId,
   };
 
   // Optional: keep local cache too (handy if server is down)
@@ -745,12 +672,7 @@ useEffect(() => {
     // ignore
   }
 
-  // Debounce server saves (write roles only)
-  if (!canWrite) {
-    setSaveStatus("idle");
-    return;
-  }
-
+  // Debounce server saves
   if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
   saveTimerRef.current = setTimeout(() => {
@@ -778,8 +700,6 @@ useEffect(() => {
   summaryFilter,
   summaryProjectId,
   summarySupplier,
-  me,
-  rolesByPageId,
 ]);
 
 
@@ -854,130 +774,6 @@ useEffect(() => {
           ),
         };
       })
-    );
-  }
-
-  const TICK_FIELDS = ["completed", "notRequired", "statusADone", "firstIssueDone"];
-
-  function pageRoleForActivePage() {
-    const pageId = activePage?.id;
-    const r = (pageId && rolesByPageId && rolesByPageId[pageId]) || me?.role || "viewer";
-    return String(r || "viewer").toLowerCase();
-  }
-
-  function canTick() {
-    const role = pageRoleForActivePage();
-    return role === "tickonly" || role === "checkbox" || role === "editor" || role === "admin" || role === "owner";
-  }
-
-  function isAdmin() {
-    const role = pageRoleForActivePage();
-    return role === "admin" || role === "owner";
-  }
-
-  function currentUserLabel() {
-    return clean(me?.name) || clean(me?.email) || "Unknown";
-  }
-
-  function applyRowReplacement(rowId, newRow) {
-    if (!activeProject || !activePage) return;
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id !== activeProject.id) return p;
-        return {
-          ...p,
-          pages: (p.pages || []).map((pg) =>
-            pg.id !== activePage.id
-              ? pg
-              : {
-                  ...pg,
-                  rows: (pg.rows || []).map((r) => (r.id === rowId ? { ...r, ...newRow } : r)),
-                }
-          ),
-        };
-      })
-    );
-  }
-
-  async function runTick(rowId, patch) {
-    const updated = await tickRowOnServer(rowId, patch);
-    if (updated) applyRowReplacement(rowId, updated);
-    else updateRow(rowId, patch);
-  }
-
-  function requestTick(row, patch) {
-    if (!row || row.kind === "header") return;
-    if (!activePage) return;
-    if (!canTick()) {
-      window.alert("You do not have permission to tick boxes on this page.");
-      return;
-    }
-
-    // determine if this is a lock-sensitive change
-    const keys = Object.keys(patch || {});
-    const lockBlocked = keys.some((k) => TICK_FIELDS.includes(k) && patch[k] === false && row?.locks?.[k]?.locked);
-    if (lockBlocked && !isAdmin()) {
-      window.alert("This checkbox is locked. Only an administrator can unlock it.");
-      return;
-    }
-
-    const tickingOn = keys.some((k) => TICK_FIELDS.includes(k) && patch[k] === true);
-    const unlocking = keys.some((k) => TICK_FIELDS.includes(k) && patch[k] === false && row?.locks?.[k]?.locked);
-
-    if (tickingOn) {
-      setTickDialog({
-        rowId: row.id,
-        patch,
-        message:
-          "Asking supplier to confirm and this will be recorded in the Audit trail and locked. Only administrator can unlock.",
-      });
-      return;
-    }
-
-    if (unlocking) {
-      setTickDialog({
-        rowId: row.id,
-        patch,
-        message: "This will unlock the checkbox and record the change in the Audit trail. Continue?",
-      });
-      return;
-    }
-
-    // safe immediate update
-    runTick(row.id, patch).catch(() => window.alert("Unable to update checkbox (server refused or unavailable)."));
-  }
-
-  function TickDialogOverlay() {
-    if (!tickDialog) return null;
-    return (
-      <div style={styles.modalBackdrop} onMouseDown={() => !tickBusy && setTickDialog(null)}>
-        <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
-          <div style={{ fontWeight: 800, fontSize: 14 }}>Confirm</div>
-          <div style={{ marginTop: 8, color: "#374151", lineHeight: 1.4 }}>{tickDialog.message}</div>
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14 }}>
-            <button style={styles.secondaryBtn} onClick={() => setTickDialog(null)} disabled={tickBusy}>
-              Cancel
-            </button>
-            <button
-              style={styles.primaryBtn}
-              disabled={tickBusy}
-              onClick={async () => {
-                try {
-                  setTickBusy(true);
-                  await runTick(tickDialog.rowId, tickDialog.patch);
-                  setTickDialog(null);
-                } catch {
-                  window.alert("Unable to update checkbox (server refused or unavailable).");
-                } finally {
-                  setTickBusy(false);
-                }
-              }}
-            >
-              Confirm
-            </button>
-          </div>
-        </div>
-      </div>
     );
   }
 
@@ -1515,8 +1311,6 @@ useEffect(() => {
           status={chatStatus}
           onReset={resetChat}
         />
-
-        <TickDialogOverlay />
       </>
     );
   }
@@ -1587,8 +1381,6 @@ useEffect(() => {
           status={chatStatus}
           onReset={resetChat}
         />
-
-        <TickDialogOverlay />
       </>
     );
   }
@@ -1775,14 +1567,6 @@ useEffect(() => {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
-          requestTick={requestTick}
-          openResponsibilityId={openResponsibilityId}
-          setOpenResponsibilityId={setOpenResponsibilityId}
-          respCommentPerson={respCommentPerson}
-          setRespCommentPerson={setRespCommentPerson}
-          respCommentText={respCommentText}
-          setRespCommentText={setRespCommentText}
-          currentUserLabel={currentUserLabel}
         />
       </div>
 
@@ -1798,8 +1582,6 @@ useEffect(() => {
         status={chatStatus}
         onReset={resetChat}
       />
-
-      <TickDialogOverlay />
     </>
   );
 }
@@ -1837,14 +1619,6 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
-    requestTick,
-    openResponsibilityId,
-    setOpenResponsibilityId,
-    respCommentPerson,
-    setRespCommentPerson,
-    respCommentText,
-    setRespCommentText,
-    currentUserLabel,
   } = props;
 
   const visibleRows = useMemo(() => {
@@ -2226,14 +2000,13 @@ function ProjectView(props) {
                   const disabled = r.completed || r.notRequired;
 
                   return (
-                    <React.Fragment key={r.id}>
-                      <tr style={rowStyle}>
+                    <tr key={r.id} style={rowStyle}>
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
                           <input
                             type="checkbox"
                             checked={!!r.completed}
-                            onChange={(e) => requestTick(r, { completed: e.target.checked })}
+                            onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
                             disabled={r.notRequired}
                           />
                         )}
@@ -2246,7 +2019,7 @@ function ProjectView(props) {
                             checked={!!r.notRequired}
                             onChange={(e) => {
                               const checked = e.target.checked;
-                              requestTick(r, {
+                              updateRow(r.id, {
                                 notRequired: checked,
                                 ...(checked ? { completed: false, statusADone: false, firstIssueDone: false } : {}),
                               });
@@ -2314,7 +2087,7 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.statusA}
                           checked={!!r.statusADone}
-                          onChange={(checked) => requestTick(r, { statusADone: checked })}
+                          onChange={(checked) => updateRow(r.id, { statusADone: checked })}
                           overdue={!!r._overdue?.overdueA}
                           disabled={disabled}
                           muted={r.notRequired}
@@ -2326,7 +2099,7 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.firstIssue}
                           checked={!!r.firstIssueDone}
-                          onChange={(checked) => requestTick(r, { firstIssueDone: checked })}
+                          onChange={(checked) => updateRow(r.id, { firstIssueDone: checked })}
                           overdue={!!r._overdue?.overdueF}
                           disabled={disabled}
                           muted={r.notRequired}
@@ -2370,99 +2143,12 @@ function ProjectView(props) {
 
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
-                          <div style={styles.inline}>
-                            <button
-                              style={styles.iconBtn}
-                              onClick={() => {
-                                setOpenRowCommentId((prev) => (prev === r.id ? null : r.id));
-                                setRowCommentPerson(currentUserLabel());
-                                setRowCommentText("");
-                              }}
-                              title={`Comments (${(r.comments || []).length || 0})`}
-                            >
-                              💬
-                            </button>
-                            <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
-                              ✕
-                            </button>
-                          </div>
+                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
+                            ✕
+                          </button>
                         )}
                       </td>
                     </tr>
-
-                    {openRowCommentId === r.id && r.kind !== "header" ? (
-                      <tr>
-                        <td style={styles.td} colSpan={11}>
-                          <div style={styles.commentsPanel}>
-                            <div style={styles.commentsHeader}>
-                              <div style={{ fontWeight: 700 }}>Comments</div>
-                              <div style={styles.muted}>Date · Person · Comment</div>
-                            </div>
-
-                            <div style={styles.commentsForm}>
-                              <label style={styles.label}>
-                                Person
-                                <input
-                                  style={styles.input}
-                                  value={rowCommentPerson}
-                                  onChange={(e) => setRowCommentPerson(e.target.value)}
-                                  placeholder="Name"
-                                />
-                              </label>
-                              <label style={styles.label}>
-                                Comment
-                                <textarea
-                                  style={{ ...styles.input, minHeight: 70, resize: "vertical" }}
-                                  value={rowCommentText}
-                                  onChange={(e) => setRowCommentText(e.target.value)}
-                                  placeholder="Add a comment..."
-                                />
-                              </label>
-                              <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-                                <button
-                                  style={styles.primaryBtn}
-                                  onClick={() => {
-                                    const person = clean(rowCommentPerson) || currentUserLabel();
-                                    const text = clean(rowCommentText);
-                                    if (!text) return;
-                                    const next = [
-                                      {
-                                        id: uid(),
-                                        dateISO: isoToday(),
-                                        person,
-                                        comment: text,
-                                      },
-                                      ...(Array.isArray(r.comments) ? r.comments : []),
-                                    ];
-                                    updateRow(r.id, { comments: next });
-                                    setRowCommentText("");
-                                  }}
-                                >
-                                  + Add comment
-                                </button>
-                              </div>
-                            </div>
-
-                            {(r.comments || []).length ? (
-                              <div style={styles.commentList}>
-                                {(r.comments || []).map((c) => (
-                                  <div key={c.id || uid()} style={styles.commentItem}>
-                                    <div style={styles.commentMeta}>
-                                      <span style={styles.pillCompact}>{c.dateISO || "—"}</span>
-                                      <span style={{ fontWeight: 700 }}>{c.person || "—"}</span>
-                                    </div>
-                                    <div style={{ whiteSpace: "pre-wrap" }}>{c.comment || ""}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div style={styles.muted}>No comments yet.</div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null}
-                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -2652,34 +2338,6 @@ const styles = {
   thTf: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 8px", borderBottom: "1px solid #E5E7EB", width: 120 },
 
   tdCenter: { padding: "10px 8px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", textAlign: "center" },
-
-  // modal
-  modalBackdrop: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(17,24,39,0.5)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 16,
-    zIndex: 50,
-  },
-  modalCard: {
-    width: "min(560px, 100%)",
-    background: "#FFFFFF",
-    border: "1px solid #E5E7EB",
-    borderRadius: 16,
-    padding: 14,
-    boxShadow: "0 18px 50px rgba(17,24,39,0.25)",
-  },
-
-  // comments (Design Responsibilities)
-  commentsPanel: { display: "grid", gap: 10 },
-  commentsHeader: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" },
-  commentsForm: { display: "grid", gap: 10, gridTemplateColumns: "minmax(200px, 260px) 1fr auto", alignItems: "end" },
-  commentList: { display: "grid", gap: 10 },
-  commentItem: { border: "1px solid #E5E7EB", borderRadius: 14, padding: 10, background: "#FFFFFF" },
-  commentMeta: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 6 },
 
   trHeader: { background: "#F9FAFB" },
   trLate: { background: "#FEF2F2" },
