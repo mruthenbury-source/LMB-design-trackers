@@ -513,9 +513,7 @@ export default function App() {
   const [commentsRowId, setCommentsRowId] = useState(null);
   const [commentPerson, setCommentPerson] = useState("");
   const [commentText, setCommentText] = useState("");
-  const [commentsRowId, setCommentsRowId] = useState(null);
-  const [commentPerson, setCommentPerson] = useState(\"\");
-  const [commentText, setCommentText] = useState(\"\");
+  // (de-duplicated declarations)
 
   // ---------- server state helpers ----------
   async function loadStateFromServer() {
