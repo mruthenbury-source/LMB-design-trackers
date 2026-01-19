@@ -471,6 +471,13 @@ export default function App() {
   const didHydrateRef = useRef(false);
   const saveTimerRef = useRef(null);
 
+  // server save UX
+  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
+  const [lastSavedUtc, setLastSavedUtc] = useState(null);
+
+  // per-page row search
+  const [rowSearch, setRowSearch] = useState("");
+
   // ---------- server state helpers ----------
   async function loadStateFromServer() {
     const r = await fetch("/api/state", { method: "GET" });
@@ -669,9 +676,15 @@ useEffect(() => {
   if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
   saveTimerRef.current = setTimeout(() => {
-    saveStateToServer(payload).catch(() => {
-      // ignore (you can surface a toast later if you want)
-    });
+    setSaveStatus("saving");
+    saveStateToServer(payload)
+      .then(() => {
+        setSaveStatus("saved");
+        setLastSavedUtc(new Date().toISOString());
+      })
+      .catch(() => {
+        setSaveStatus("error");
+      });
   }, 600);
 
   return () => {
@@ -1531,6 +1544,10 @@ useEffect(() => {
           updatePage={updatePage}
           updateRow={updateRow}
           computedRows={computedRows}
+          rowSearch={rowSearch}
+          setRowSearch={setRowSearch}
+          saveStatus={saveStatus}
+          lastSavedUtc={lastSavedUtc}
           addProject={addProject}
           addMasterRow={addMasterRow}
           updateMasterRow={updateMasterRow}
@@ -1580,6 +1597,10 @@ function ProjectView(props) {
     updateProject,
     updateRow,
     computedRows,
+    rowSearch,
+    setRowSearch,
+    saveStatus,
+    lastSavedUtc,
     addMasterRow,
     updateMasterRow,
     removeMasterRow,
@@ -1599,6 +1620,16 @@ function ProjectView(props) {
     setView,
     VIEW,
   } = props;
+
+  const visibleRows = useMemo(() => {
+    const q = String(rowSearch || "").trim().toLowerCase();
+    if (!q) return computedRows;
+    return (computedRows || []).filter((r) => {
+      if (r.kind === "header") return true;
+      const blob = `${r.item || ""} ${r._computed?.requiredOnSite || ""} ${r._computed?.statusA || ""} ${r._computed?.firstIssue || ""}`.toLowerCase();
+      return blob.includes(q);
+    });
+  }, [computedRows, rowSearch]);
 
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
@@ -1638,6 +1669,10 @@ function ProjectView(props) {
             </option>
           ))}
         </select>
+      </div>
+
+      <div style={{ marginLeft: "auto", display: "flex", alignItems: "flex-end", paddingBottom: 2 }}>
+        <SaveBadge status={saveStatus} lastSavedUtc={lastSavedUtc} />
       </div>
     </div>
   );
@@ -1911,9 +1946,25 @@ function ProjectView(props) {
                 <TrafficKeyDotsOnly />
               </div>
             </div>
-            <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
-              + Manual row
-            </button>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                style={{ ...styles.input, width: 260 }}
+                placeholder="Search rows..."
+                value={rowSearch}
+                onChange={(e) => setRowSearch(e.target.value)}
+              />
+              <button
+                style={styles.secondaryBtn}
+                onClick={() => setRowSearch("")}
+                disabled={!rowSearch}
+                title="Clear search"
+              >
+                Clear
+              </button>
+              <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
+                + Manual row
+              </button>
+            </div>
           </div>
 
           <div style={styles.tableWrap}>
@@ -1934,7 +1985,7 @@ function ProjectView(props) {
                 </tr>
               </thead>
               <tbody>
-                {computedRows.map((r) => {
+                {visibleRows.map((r) => {
                   const rowStyle =
                     r.kind === "header"
                       ? styles.trHeader
@@ -2110,6 +2161,40 @@ function ProjectView(props) {
 }
 
 /* ---------- small components ---------- */
+function SaveBadge({ status, lastSavedUtc }) {
+  const label =
+    status === "saving"
+      ? "Saving…"
+      : status === "saved"
+      ? `Saved${lastSavedUtc ? ` • ${new Date(lastSavedUtc).toLocaleString()}` : ""}`
+      : status === "error"
+      ? "Offline / not saved"
+      : "";
+
+  if (!label) return null;
+
+  const bg = status === "error" ? "#FEF2F2" : status === "saving" ? "#FFFBEB" : "#ECFDF5";
+  const border = status === "error" ? "#FCA5A5" : status === "saving" ? "#FCD34D" : "#6EE7B7";
+  const color = status === "error" ? "#991B1B" : status === "saving" ? "#92400E" : "#065F46";
+
+  return (
+    <div
+      style={{
+        fontSize: 12,
+        padding: "6px 10px",
+        borderRadius: 999,
+        border: `1px solid ${border}`,
+        background: bg,
+        color,
+        whiteSpace: "nowrap",
+      }}
+      title={label}
+    >
+      {label}
+    </div>
+  );
+}
+
 function DatePill({ value, isHeader, overdue, done, muted }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
   const empty = !value;
