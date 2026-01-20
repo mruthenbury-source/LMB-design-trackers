@@ -1706,6 +1706,53 @@ function ProjectView(props) {
     if (isAdmin) return activeProject.pages || [];
     return allowedPages || [];
   }, [activeProject, isAdmin, allowedPages]);
+
+  // ----- comments modal (per-row history) -----
+  const [commentRowId, setCommentRowId] = useState(null);
+  const [commentName, setCommentName] = useState("");
+  const [commentText, setCommentText] = useState("");
+
+  const commentRow = useMemo(() => {
+    if (!commentRowId) return null;
+    return (computedRows || []).find((x) => x.id === commentRowId) || null;
+  }, [commentRowId, computedRows]);
+
+  function openComments(row) {
+    if (!row || row.kind === "header") return;
+    setCommentRowId(row.id);
+    setCommentName("");
+    setCommentText("");
+  }
+
+  function closeComments() {
+    setCommentRowId(null);
+    setCommentName("");
+    setCommentText("");
+  }
+
+  function saveComment() {
+    if (!commentRow) return;
+    const name = clean(commentName);
+    const text = clean(commentText);
+    if (!name || !text) {
+      alert("Please enter your name and a comment.");
+      return;
+    }
+
+    const entry = {
+      id: uid(),
+      name,
+      dateISO: isoToday(),
+      text,
+      locked: true,
+      lockedBy: name,
+      lockedAt: new Date().toISOString(),
+    };
+
+    const prev = Array.isArray(commentRow.comments) ? commentRow.comments : [];
+    updateRow(commentRow.id, { comments: [...prev, entry] });
+    closeComments();
+  }
 // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
@@ -2052,6 +2099,7 @@ function ProjectView(props) {
                   <th style={styles.thMed}>Status A</th>
                   <th style={styles.thMed}>First</th>
                   <th style={styles.thTf}>TF</th>
+                  <th style={styles.thSmall}>💬</th>
                   <th style={styles.thSmall}></th>
                 </tr>
               </thead>
@@ -2188,7 +2236,11 @@ function ProjectView(props) {
                               min={0}
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
-                              onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
+                              onChange={(e) =>
+                                updateRow(r.id, {
+                                  overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0),
+                                })
+                              }
                               disabled={r.notRequired}
                               title="Req→A"
                             />
@@ -2198,11 +2250,24 @@ function ProjectView(props) {
                               min={0}
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
-                              onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
+                              onChange={(e) =>
+                                updateRow(r.id, {
+                                  overrideDaysStatusAToFirstIssue:
+                                    e.target.value === "" ? null : clampInt(e.target.value, 0),
+                                })
+                              }
                               disabled={r.notRequired}
                               title="A→First"
                             />
                           </div>
+                        )}
+                      </td>
+
+                      <td style={styles.tdCenter}>
+                        {r.kind === "header" ? null : (
+                          <button style={styles.smallBtn} onClick={() => openComments(r)} title="Add/view comments">
+                            💬 {Array.isArray(r.comments) && r.comments.length ? r.comments.length : ""}
+                          </button>
                         )}
                       </td>
 
@@ -2221,7 +2286,69 @@ function ProjectView(props) {
           </div>
         </div>
       )}
-    </div>
+    
+
+      {commentRowId ? (
+        <div style={styles.modalOverlay} onMouseDown={closeComments}>
+          <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <div style={{ fontWeight: 900 }}>Comments</div>
+              <button style={styles.iconBtn} onClick={closeComments} title="Close">
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={styles.muted}>Row: {commentRow?.item || "—"}</div>
+
+              <label style={styles.label}>
+                Your name
+                <input style={styles.input} value={commentName} onChange={(e) => setCommentName(e.target.value)} placeholder="Name" />
+              </label>
+
+              <label style={styles.label}>
+                Date
+                <input style={styles.inputMuted} value={isoToday()} readOnly />
+              </label>
+
+              <label style={styles.label}>
+                Comment
+                <textarea
+                  style={{ ...styles.input, minHeight: 90, resize: "vertical" }}
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  placeholder="Write your comment…"
+                />
+              </label>
+
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button style={styles.secondaryBtn} onClick={closeComments}>Cancel</button>
+                <button style={styles.primaryBtn} onClick={saveComment}>Save (locks)</button>
+              </div>
+
+              <div style={{ borderTop: "1px solid #E5E7EB", paddingTop: 10 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>History</div>
+                {Array.isArray(commentRow?.comments) && commentRow.comments.length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {[...commentRow.comments].slice().reverse().map((c) => (
+                      <div key={c.id} style={styles.commentItem}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                          <div style={{ fontWeight: 800 }}>{c.name || "—"}</div>
+                          <div style={styles.muted}>{c.dateISO || ""} {c.locked ? "🔒" : ""}</div>
+                        </div>
+                        <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{c.text || ""}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={styles.muted}>No comments yet.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+</div>
   );
 }
 
@@ -2463,4 +2590,42 @@ const styles = {
   projectHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 },
   projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
   projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
+
+  commentItem: {
+    border: "1px solid #E5E7EB",
+    borderRadius: 14,
+    padding: 10,
+    background: "#FFFFFF",
+    boxShadow: "0 6px 18px rgba(17,24,39,0.05)",
+  },
+
+  // --- modal ---
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(17,24,39,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 50,
+  },
+  modalCard: {
+    width: "min(720px, 96vw)",
+    maxHeight: "84vh",
+    overflow: "auto",
+    background: "#FFFFFF",
+    border: "1px solid #E5E7EB",
+    borderRadius: 16,
+    boxShadow: "0 24px 80px rgba(0,0,0,0.25)",
+    padding: 14,
+  },
+  modalHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10,
+  },
+
 };
