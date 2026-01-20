@@ -3,25 +3,6 @@ import ChatOverlay from "./ChatOverlay.jsx";
 
 const LS_KEY = "design-programme-workback:v16";
 
-// --- API helpers (SWA Functions) ---
-async function apiGetJSON(url) {
-  const r = await fetch(url, { method: "GET" });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || `${url} ${r.status}`);
-  return data;
-}
-
-async function apiPostJSON(url, body) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || `${url} ${r.status}`);
-  return data;
-}
-
 /* ---------- date helpers ---------- */
 function isoToday() {
   const d = new Date();
@@ -262,8 +243,6 @@ function defaultRow(kind = "item") {
     notRequired: false,
     statusADone: false,
     firstIssueDone: false,
-    // comments + milestone locks (used for supplier guest permissions)
-    comments: [],
     locks: { statusADone: null, firstIssueDone: null },
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
@@ -487,11 +466,9 @@ export default function App() {
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
 
-  // --- Auth / Permissions (Azure Static Web Apps) ---
-  const [authUser, setAuthUser] = useState(null);
+  // --- Auth (Azure Static Web Apps) ---
+  const [authUser, setAuthUser] = useState(undefined); // undefined = loading, null = signed out
   const [authRoles, setAuthRoles] = useState([]);
-  const isAdmin = authRoles.includes("admin");
-  const isGuest = !!authUser && !isAdmin;
 
   useEffect(() => {
     let cancelled = false;
@@ -500,8 +477,12 @@ export default function App() {
         const me = await apiGetJSON("/.auth/me");
         const principal = me?.clientPrincipal || me?.[0]?.clientPrincipal || null;
         if (cancelled) return;
-        setAuthUser(principal);
-        const roles = Array.isArray(principal?.userRoles) ? principal.userRoles : [];
+        setAuthUser(principal || null);
+        const roles = Array.isArray(principal?.userRoles)
+          ? principal.userRoles
+          : Array.isArray(principal?.roles)
+          ? principal.roles
+          : [];
         setAuthRoles(roles);
       } catch {
         if (cancelled) return;
@@ -510,15 +491,19 @@ export default function App() {
       }
     })();
     return () => {
-      cancelled = true;
+      cancelled = true
     };
   }, []);
+
+  const isAdmin = authRoles.includes("admin");
+  const isGuest = authUser && !isAdmin;
 
   function hasSupplierAccess(supplier) {
     const s = String(supplier || "").trim();
     if (!s) return false;
-    return isAdmin || authRoles.includes(`supplier:${s}`);
+    return isAdmin || authRoles.includes(`supplier:${s}`) || authRoles.includes(s);
   }
+
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -527,9 +512,6 @@ export default function App() {
 
   // Programme Summary print target
   const programmePrintRef = useRef(null);
-
-  // --- Row comments modal (tracker rows) ---
-  const [commentModal, setCommentModal] = useState({ open: false, rowId: null, name: "", text: "" });
 
   /* ---------------- CHATBOT (UI + DATA CONTEXT) ---------------- */
   const [chatOpen, setChatOpen] = useState(false);
@@ -632,11 +614,7 @@ export default function App() {
                           notRequired: !!r.notRequired,
                           statusADone: !!r.statusADone,
                           firstIssueDone: !!r.firstIssueDone,
-                          comments: Array.isArray(r.comments) ? r.comments : [],
-                          locks: {
-                            statusADone: r?.locks?.statusADone || null,
-                            firstIssueDone: r?.locks?.firstIssueDone || null,
-                          },
+                          locks: r.locks || { statusADone: null, firstIssueDone: null },
                           meta: {
                             generated: !!r?.meta?.generated,
                             blockZone: r?.meta?.blockZone || "",
@@ -739,6 +717,45 @@ export default function App() {
     );
   }, [activeProject, activePageId]);
 
+  // --- Permissions: pages visible to this user in the active project ---
+  const allowedPages = useMemo(() => {
+    if (!activeProject?.pages?.length) return [];
+
+    if (isAdmin) return activeProject.pages;
+
+    // Guests: only non-master pages where responsibility.supplier matches a role
+    return activeProject.pages.filter((pg) => {
+      if (pg?.meta?.isMaster) return false;
+      const respId = pg?.meta?.responsibilityId;
+      const resp = (activeProject.responsibilities || []).find((r) => r.id === respId);
+      const supplier = String(resp?.supplier || '').trim();
+      return supplier && hasSupplierAccess(supplier);
+    });
+  }, [activeProject, isAdmin, authRoles]);
+
+  // If current page isn't allowed (or is master for guests), self-heal to the first allowed page.
+  useEffect(() => {
+    if (!activeProject) return;
+
+    // Wait until auth has resolved (undefined = loading)
+    if (authUser === undefined) return;
+
+    if (isAdmin) return;
+
+    if (!allowedPages.length) {
+      // No allowed pages for this user in this project
+      if (activePageId !== null) setActivePageId(null);
+      return;
+    }
+
+    const ok = allowedPages.some((p) => p.id === activePageId);
+    if (!ok) {
+      setActivePageId(allowedPages[0].id);
+    }
+  }, [activeProject, allowedPages, activePageId, isAdmin, authUser]);
+
+
+  // --- supplier for current page (permission key) ---
   const currentSupplier = useMemo(() => {
     if (!activeProject || !activePage || activePage?.meta?.isMaster) return "";
     const respId = activePage?.meta?.responsibilityId;
@@ -760,39 +777,6 @@ export default function App() {
     }
   }, [activeProject, activePageId]);
 
-  // guest cannot view Project Home; auto-jump to their supplier page
-  useEffect(() => {
-    if (!activeProject || !activePage) return;
-    if (!isGuest) return;
-    if (!activePage.meta?.isMaster) return;
-
-    const visible = (activeProject.pages || []).filter((pg) => {
-      if (pg.meta?.isMaster) return false;
-      const resp = (activeProject.responsibilities || []).find((r) => r.id === pg.meta?.responsibilityId);
-      return resp && hasSupplierAccess(resp.supplier);
-    });
-
-    if (visible.length) setActivePageId(visible[0].id);
-  }, [activeProject, activePage, isGuest]);
-
-
-  // Redirect supplier guests away from Project Home (master page)
-  useEffect(() => {
-    if (!activeProject || !activeProject.pages?.length) return;
-    if (!isGuest) return;
-    const ap = activeProject;
-    const current = ap.pages.find((p) => p.id === activePageId) || ap.pages[0];
-    if (!current?.meta?.isMaster) return;
-
-    // pick first page whose responsibility supplier matches the user's roles
-    const firstAllowed = (ap.pages || []).find((pg) => {
-      if (pg.meta?.isMaster) return false;
-      const resp = (ap.responsibilities || []).find((r) => r.id === pg.meta?.responsibilityId);
-      return resp && hasSupplierAccess(resp.supplier);
-    });
-
-    if (firstAllowed) setActivePageId(firstAllowed.id);
-  }, [isGuest, activeProject?.id, activePageId]);
   /* ---- update helpers ---- */
   function updateProject(projectId, patch) {
     setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...patch } : p)));
@@ -977,8 +961,16 @@ export default function App() {
 
   function goToProject() {
     if (!activeProject) return;
-    const mp = activeProject.pages.find((x) => x.meta?.isMaster) || activeProject.pages[0];
-    setActivePageId(mp.id);
+
+    if (isAdmin) {
+      const mp = activeProject.pages.find((x) => x.meta?.isMaster) || activeProject.pages[0];
+      setActivePageId(mp?.id || null);
+    } else {
+      // guest: go to first allowed tracker page
+      const first = allowedPages[0] || null;
+      setActivePageId(first?.id || null);
+    }
+
     setView(VIEW.PROJECT);
   }
 
@@ -1242,38 +1234,6 @@ export default function App() {
       bySupplier,
     };
   }, [summaryItems, view, activeProject, activePage, projects]);
-
-  function applyServerState(serverState) {
-    if (!serverState || typeof serverState !== "object") return;
-    if (Number.isFinite(serverState.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(serverState.globalDaysReqToStatusA);
-    if (Number.isFinite(serverState.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(serverState.globalDaysStatusAToFirstIssue);
-    if (Array.isArray(serverState.projects)) setProjects(serverState.projects);
-    if (typeof serverState.activeProjectId === "string") setActiveProjectId(serverState.activeProjectId);
-    if (typeof serverState.activePageId === "string") setActivePageId(serverState.activePageId);
-    if (serverState.view && Object.values(VIEW).includes(serverState.view)) setView(serverState.view);
-  }
-
-  async function tickMilestone({ projectId, pageId, rowId, field }) {
-    const lockedField = field === "statusADone" ? "statusADone" : "firstIssueDone";
-
-    if (!isAdmin) {
-      const ok = window.confirm("Once ticked this will be locked and only administrator can unlock.");
-      if (!ok) return;
-    }
-
-    const res = await apiPostJSON("/api/tick", { projectId, pageId, rowId, field: lockedField });
-    if (res?.state) applyServerState(res.state);
-  }
-
-  async function addRowComment({ projectId, pageId, rowId, name, text }) {
-    const res = await apiPostJSON("/api/comment", { projectId, pageId, rowId, name, text });
-    if (res?.state) applyServerState(res.state);
-  }
-
-  async function adminUnlock({ projectId, pageId, rowId, field }) {
-    const res = await apiPostJSON("/api/unlock", { projectId, pageId, rowId, field });
-    if (res?.state) applyServerState(res.state);
-  }
 
   async function sendChat() {
     const text = chatInput.trim();
@@ -1639,17 +1599,12 @@ export default function App() {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
-          isAdmin={isAdmin}
-          isGuest={isGuest}
-          hasSupplierAccess={hasSupplierAccess}
           authUser={authUser}
-          currentSupplier={currentSupplier}
-          tickMilestone={tickMilestone}
-          addRowComment={addRowComment}
-          adminUnlock={adminUnlock}
-          commentModal={commentModal}
-          setCommentModal={setCommentModal}
-          resetChat={resetChat}
+          isAdmin={isAdmin}
+          isGuest={!!isGuest}
+          hasSupplierAccess={hasSupplierAccess}
+          allowedPages={allowedPages}
+          allowedPages={allowedPages}
         />
       </div>
 
@@ -1664,29 +1619,6 @@ export default function App() {
         endRef={chatEndRef}
         status={chatStatus}
         onReset={resetChat}
-      />
-
-      <CommentModal
-        open={commentModal.open}
-        row={(() => {
-          try {
-            const proj = activeProject;
-            const pg = activePage;
-            const r = (pg?.rows || []).find((x) => x.id === commentModal.rowId);
-            return { project: proj, page: pg, row: r };
-          } catch {
-            return { project: null, page: null, row: null };
-          }
-        })()}
-        name={commentModal.name}
-        setName={(v) => setCommentModal((m) => ({ ...m, name: v }))}
-        text={commentModal.text}
-        setText={(v) => setCommentModal((m) => ({ ...m, text: v }))}
-        onClose={() => setCommentModal({ open: false, rowId: null, name: "", text: "" })}
-        onSave={async ({ projectId, pageId, rowId, name, text }) => {
-          await addRowComment({ projectId, pageId, rowId, name, text });
-          setCommentModal((m) => ({ ...m, open: false, rowId: null, text: "" }));
-        }}
       />
     </>
   );
@@ -1722,28 +1654,27 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
+    authUser,
     isAdmin,
     isGuest,
     hasSupplierAccess,
-    authUser,
-    currentSupplier,
-    tickMilestone,
-    addRowComment,
-    adminUnlock,
-    commentModal,
-    setCommentModal,
+    allowedPages,
   } = props;
 
-  const visiblePages = useMemo(() => {
-    const pages = activeProject?.pages || [];
-    if (isAdmin || !isGuest) return pages;
+  const visiblePages = isAdmin ? (activeProject?.pages || []) : (allowedPages || []);
 
-    return pages.filter((pg) => {
-      if (pg.meta?.isMaster) return false;
-      const resp = (activeProject?.responsibilities || []).find((r) => r.id === pg.meta?.responsibilityId);
-      return resp && hasSupplierAccess(resp.supplier);
+  function firstAllowedPageForProject(proj) {
+    if (!proj?.pages?.length) return null;
+    if (isAdmin) return proj.pages.find((p) => p.meta?.isMaster) || proj.pages[0] || null;
+    const pages = proj.pages.filter((pg) => {
+      if (pg?.meta?.isMaster) return false;
+      const respId = pg?.meta?.responsibilityId;
+      const resp = (proj.responsibilities || []).find((r) => r.id === respId);
+      const supplier = String(resp?.supplier || "").trim();
+      return supplier && hasSupplierAccess(supplier);
     });
-  }, [activeProject, isAdmin, isGuest, hasSupplierAccess]);
+    return pages[0] || null;
+  }
 
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
@@ -1757,8 +1688,8 @@ function ProjectView(props) {
             const pid = e.target.value;
             setActiveProjectId(pid);
             const proj = projects.find((p) => p.id === pid);
-            const mp = proj?.pages?.find((x) => x.meta?.isMaster) || proj?.pages?.[0];
-            setActivePageId(mp?.id || null);
+            const first = firstAllowedPageForProject(proj);
+            setActivePageId(first?.id || null);
           }}
         >
           {projects.map((p) => (
@@ -1777,7 +1708,7 @@ function ProjectView(props) {
           onChange={(e) => setActivePageId(e.target.value)}
           disabled={!activeProject}
         >
-          {(visiblePages || []).map((pg) => (
+          {visiblePages.map((pg) => (
             <option key={pg.id} value={pg.id}>
               {pg.name}
               {pg.meta?.isMaster ? " (Project Home)" : pg.meta?.generated ? " (Auto)" : ""}
@@ -1787,6 +1718,18 @@ function ProjectView(props) {
       </div>
     </div>
   );
+
+  if (authUser && !isAdmin && (!allowedPages || !allowedPages.length)) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.card}>
+          <h2 style={styles.h2}>No pages assigned</h2>
+          <p style={styles.sub}>You are signed in, but you don’t have access to any supplier tracker pages in this project. Ask an administrator to ensure the Responsibility supplier matches one of your roles (for example, supplier:SupplierName).</p>
+          <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>Back</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.page}>
@@ -2061,11 +2004,9 @@ function ProjectView(props) {
                 <TrafficKeyDotsOnly />
               </div>
             </div>
-            {!isGuest ? (
-              <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
-                + Manual row
-              </button>
-            ) : null}
+            <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
+              + Manual row
+            </button>
           </div>
 
           <div style={styles.tableWrap}>
@@ -2081,7 +2022,6 @@ function ProjectView(props) {
                   <th style={styles.thMed}>Req</th>
                   <th style={styles.thMed}>Status A</th>
                   <th style={styles.thMed}>First</th>
-                  <th style={styles.thSmall}>💬</th>
                   <th style={styles.thTf}>TF</th>
                   <th style={styles.thSmall}></th>
                 </tr>
@@ -2109,7 +2049,7 @@ function ProjectView(props) {
                             type="checkbox"
                             checked={!!r.completed}
                             onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired}
                           />
                         )}
                       </td>
@@ -2119,7 +2059,6 @@ function ProjectView(props) {
                           <input
                             type="checkbox"
                             checked={!!r.notRequired}
-                            disabled={isGuest}
                             onChange={(e) => {
                               const checked = e.target.checked;
                               updateRow(r.id, {
@@ -2141,7 +2080,7 @@ function ProjectView(props) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.item}
                             onChange={(e) => updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired}
                           />
                         )}
                       </td>
@@ -2152,7 +2091,7 @@ function ProjectView(props) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.anchorKey}
                             onChange={(e) => updateRow(r.id, { anchorKey: e.target.value })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired}
                           >
                             {ANCHORS.map((a) => (
                               <option key={a.key} value={a.key}>
@@ -2170,7 +2109,7 @@ function ProjectView(props) {
                             type="date"
                             value={r.anchorDateISO}
                             onChange={(e) => updateRow(r.id, { anchorDateISO: e.target.value })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired}
                           />
                         )}
                       </td>
@@ -2184,12 +2123,9 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.statusA}
                           checked={!!r.statusADone}
-                          locked={!!r?.locks?.statusADone}
-                          onTick={() => tickMilestone({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "statusADone" })}
-                          canUnlock={isAdmin}
-                          onUnlock={() => adminUnlock({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "statusADone" })}
+                          onChange={(checked) => updateRow(r.id, { statusADone: checked })}
                           overdue={!!r._overdue?.overdueA}
-                          disabled={disabled || isGuest}
+                          disabled={disabled}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2199,30 +2135,11 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.firstIssue}
                           checked={!!r.firstIssueDone}
-                          locked={!!r?.locks?.firstIssueDone}
-                          onTick={() => tickMilestone({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "firstIssueDone" })}
-                          canUnlock={isAdmin}
-                          onUnlock={() => adminUnlock({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "firstIssueDone" })}
+                          onChange={(checked) => updateRow(r.id, { firstIssueDone: checked })}
                           overdue={!!r._overdue?.overdueF}
-                          disabled={disabled || isGuest}
+                          disabled={disabled}
                           muted={r.notRequired}
                         />
-                      </td>
-
-                      <td style={styles.tdCenter}>
-                        {r.kind === "header" ? null : (
-                          <button
-                            style={styles.commentBtn}
-                            onClick={() => {
-                              const defaultName = authUser?.userDetails || "";
-                              setCommentModal({ open: true, rowId: r.id, name: defaultName, text: "" });
-                            }}
-                            title="Add / view comments"
-                          >
-                            💬
-                            {Array.isArray(r.comments) && r.comments.length ? <span style={styles.commentCount}>{r.comments.length}</span> : null}
-                          </button>
-                        )}
                       </td>
 
                       <td style={styles.td}>
@@ -2235,7 +2152,7 @@ function ProjectView(props) {
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
                               onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || isGuest}
+                              disabled={r.notRequired}
                               title="Req→A"
                             />
                             <input
@@ -2245,7 +2162,7 @@ function ProjectView(props) {
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
                               onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || isGuest}
+                              disabled={r.notRequired}
                               title="A→First"
                             />
                           </div>
@@ -2254,7 +2171,7 @@ function ProjectView(props) {
 
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
-                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row" disabled={isGuest}>
+                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
                             ✕
                           </button>
                         )}
@@ -2268,6 +2185,8 @@ function ProjectView(props) {
         </div>
       )}
     </div>
+      </div>
+    </>
   );
 }
 
@@ -2289,12 +2208,9 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
     </div>
   );
 }
-function MilestoneCell({ isHeader, value, checked, locked, onTick, canUnlock, onUnlock, overdue, disabled, muted }) {
+function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, muted }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
   const empty = !value;
-  const isLocked = !!locked;
-  const checkboxDisabled = !!disabled || empty || isLocked;
-
   return (
     <div style={styles.milestoneCell}>
       <div
@@ -2308,26 +2224,7 @@ function MilestoneCell({ isHeader, value, checked, locked, onTick, canUnlock, on
       >
         {empty ? "—" : value}
       </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {isLocked ? <span title="Locked">🔒</span> : null}
-        {isLocked && canUnlock ? (
-          <button type="button" style={styles.unlockBtn} onClick={onUnlock} title="Unlock (admin only)">
-            Unlock
-          </button>
-        ) : null}
-        <input
-          type="checkbox"
-          checked={!!checked}
-          onChange={(e) => {
-            const next = !!e.target.checked;
-            if (!next) return; // no uncheck; use Unlock if admin
-            if (isLocked || checkboxDisabled) return;
-            onTick?.();
-          }}
-          disabled={checkboxDisabled}
-        />
-      </div>
+      <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
     </div>
   );
 }
@@ -2346,105 +2243,6 @@ function FilterPill({ label, active, onClick }) {
       {label}
     </button>
   );
-
-
-function CommentModal({ open, row, isGuest, isAdmin, authUser, onClose, onSave }) {
-  const [name, setName] = useState("");
-  const [text, setText] = useState("");
-  const todayISO = isoToday();
-
-  useEffect(() => {
-    if (!open) return;
-    const defaultName = authUser?.userDetails || "";
-    setName(defaultName);
-    setText("");
-  }, [open, authUser]);
-
-  if (!open) return null;
-
-  const comments = Array.isArray(row?.comments) ? row.comments : [];
-
-  return (
-    <div style={styles.modalBackdrop} onMouseDown={onClose}>
-      <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <div style={styles.modalHeader}>
-          <div>
-            <div style={styles.modalTitle}>Comments</div>
-            <div style={styles.modalSub}>{row?.item || ""}</div>
-          </div>
-          <button style={styles.iconBtn} onClick={onClose} title="Close">
-            ✕
-          </button>
-        </div>
-
-        <div style={styles.modalBody}>
-          <div style={styles.modalFormRow}>
-            <label style={styles.label}>
-              Your name
-              <input style={styles.input} value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
-            </label>
-            <label style={styles.label}>
-              Date
-              <input style={styles.input} value={todayISO} disabled />
-            </label>
-          </div>
-
-          <label style={styles.label}>
-            Comment
-            <textarea
-              style={{ ...styles.input, minHeight: 90, resize: "vertical" }}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Write your comment…"
-            />
-          </label>
-
-          <div style={styles.modalActions}>
-            <button style={styles.secondaryBtn} onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              style={styles.primaryBtn}
-              onClick={() => onSave({ name: name.trim(), dateISO: todayISO, text: text.trim() })}
-              disabled={!name.trim() || !text.trim()}
-            >
-              Save (locks)
-            </button>
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>History</div>
-            {!comments.length ? (
-              <div style={styles.muted}>No comments yet.</div>
-            ) : (
-              <div style={styles.commentHistory}>
-                {comments
-                  .slice()
-                  .reverse()
-                  .map((c, idx) => (
-                    <div key={c.id || idx} style={styles.commentItem}>
-                      <div style={styles.commentMeta}>
-                        <span style={{ fontWeight: 900 }}>{c.name || "—"}</span>
-                        <span style={styles.muted}>{c.date || c.dateISO || ""}</span>
-                      </div>
-                      <div style={{ whiteSpace: "pre-wrap" }}>{c.text}</div>
-                      {c.locked ? <div style={styles.commentLocked}>Locked</div> : null}
-                    </div>
-                  ))}
-              </div>
-            )}
-          </div>
-
-          {isGuest ? (
-            <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>
-              Guest access: you can add comments and tick milestones on your supplier page. Edits are locked after saving.
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
 }
 
 /* ---------- styles ---------- */
@@ -2559,18 +2357,6 @@ const styles = {
   secondaryBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 14, padding: "10px 12px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
   smallBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
   iconBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer" },
-
-  commentBtn: { position: "relative", background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", width: 48, height: 34 },
-  commentCount: { position: "absolute", top: -6, right: -6, background: "#111827", color: "#FFFFFF", borderRadius: 999, fontSize: 10, padding: "2px 6px", lineHeight: 1 },
-
-  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 9999 },
-  modalCard: { width: "100%", maxWidth: 600, background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, boxShadow: "0 20px 60px rgba(17,24,39,0.25)", padding: 14 },
-  modalTop: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 },
-  textarea: { width: "100%", minHeight: 110, border: "1px solid #D1D5DB", borderRadius: 12, padding: "10px 10px", fontSize: 12, outline: "none", resize: "vertical" },
-  divider: { height: 1, background: "#E5E7EB", margin: "12px 0" },
-  commentItem: { border: "1px solid #E5E7EB", borderRadius: 12, padding: 10, background: "#FFFFFF" },
-  lockChip: { display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 999, border: "1px solid #E5E7EB", background: "#FFFFFF", fontSize: 12 },
-  unlockBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "6px 8px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
 
   badgeBase: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 900, border: "1px solid transparent", whiteSpace: "nowrap" },
   badgeOverdue: { background: "#FEF2F2", color: "#991B1B", borderColor: "#FCA5A5" },
