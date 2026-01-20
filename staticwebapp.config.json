@@ -1,0 +1,20 @@
+{
+  "routes": [
+    {
+      "route": "/api/state",
+      "allowedRoles": ["admin"]
+    },
+    {
+      "route": "/api/unlock",
+      "allowedRoles": ["admin"]
+    },
+    {
+      "route": "/api/tick",
+      "allowedRoles": ["authenticated"]
+    },
+    {
+      "route": "/api/comment",
+      "allowedRoles": ["authenticated"]
+    }
+  ]
+}
