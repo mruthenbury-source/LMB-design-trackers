@@ -3,6 +3,25 @@ import ChatOverlay from "./ChatOverlay.jsx";
 
 const LS_KEY = "design-programme-workback:v16";
 
+// --- API helpers (SWA Functions) ---
+async function apiGetJSON(url) {
+  const r = await fetch(url, { method: "GET" });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || `${url} ${r.status}`);
+  return data;
+}
+
+async function apiPostJSON(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || `${url} ${r.status}`);
+  return data;
+}
+
 /* ---------- date helpers ---------- */
 function isoToday() {
   const d = new Date();
@@ -243,9 +262,9 @@ function defaultRow(kind = "item") {
     notRequired: false,
     statusADone: false,
     firstIssueDone: false,
-    // Comments per row (tracker pages)
-    // [{ id, name, dateISO, text }]
+    // comments + milestone locks (used for supplier guest permissions)
     comments: [],
+    locks: { statusADone: null, firstIssueDone: null },
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
 }
@@ -468,6 +487,39 @@ export default function App() {
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
 
+  // --- Auth / Permissions (Azure Static Web Apps) ---
+  const [authUser, setAuthUser] = useState(null);
+  const [authRoles, setAuthRoles] = useState([]);
+  const isAdmin = authRoles.includes("admin");
+  const isGuest = !!authUser && !isAdmin;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await apiGetJSON("/.auth/me");
+        const principal = me?.clientPrincipal || me?.[0]?.clientPrincipal || null;
+        if (cancelled) return;
+        setAuthUser(principal);
+        const roles = Array.isArray(principal?.userRoles) ? principal.userRoles : [];
+        setAuthRoles(roles);
+      } catch {
+        if (cancelled) return;
+        setAuthUser(null);
+        setAuthRoles([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function hasSupplierAccess(supplier) {
+    const s = String(supplier || "").trim();
+    if (!s) return false;
+    return isAdmin || authRoles.includes(`supplier:${s}`);
+  }
+
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
   const [summaryProjectId, setSummaryProjectId] = useState("all");
@@ -475,6 +527,9 @@ export default function App() {
 
   // Programme Summary print target
   const programmePrintRef = useRef(null);
+
+  // --- Row comments modal (tracker rows) ---
+  const [commentModal, setCommentModal] = useState({ open: false, rowId: null, name: "", text: "" });
 
   /* ---------------- CHATBOT (UI + DATA CONTEXT) ---------------- */
   const [chatOpen, setChatOpen] = useState(false);
@@ -578,6 +633,10 @@ export default function App() {
                           statusADone: !!r.statusADone,
                           firstIssueDone: !!r.firstIssueDone,
                           comments: Array.isArray(r.comments) ? r.comments : [],
+                          locks: {
+                            statusADone: r?.locks?.statusADone || null,
+                            firstIssueDone: r?.locks?.firstIssueDone || null,
+                          },
                           meta: {
                             generated: !!r?.meta?.generated,
                             blockZone: r?.meta?.blockZone || "",
@@ -680,6 +739,13 @@ export default function App() {
     );
   }, [activeProject, activePageId]);
 
+  const currentSupplier = useMemo(() => {
+    if (!activeProject || !activePage || activePage?.meta?.isMaster) return "";
+    const respId = activePage?.meta?.responsibilityId;
+    const resp = (activeProject.responsibilities || []).find((r) => r.id === respId);
+    return String(resp?.supplier || "").trim();
+  }, [activeProject, activePage]);
+
   // Ensure we always have valid active IDs
   useEffect(() => {
     if (!projects.length) return;
@@ -694,6 +760,47 @@ export default function App() {
     }
   }, [activeProject, activePageId]);
 
+  const currentSupplier = useMemo(() => {
+    if (!activeProject || !activePage || activePage?.meta?.isMaster) return "";
+    const respId = activePage?.meta?.responsibilityId;
+    const resp = (activeProject.responsibilities || []).find((r) => r.id === respId);
+    return String(resp?.supplier || "").trim();
+  }, [activeProject, activePage]);
+
+
+  // guest cannot view Project Home; auto-jump to their supplier page
+  useEffect(() => {
+    if (!activeProject || !activePage) return;
+    if (!isGuest) return;
+    if (!activePage.meta?.isMaster) return;
+
+    const visible = (activeProject.pages || []).filter((pg) => {
+      if (pg.meta?.isMaster) return false;
+      const resp = (activeProject.responsibilities || []).find((r) => r.id === pg.meta?.responsibilityId);
+      return resp && hasSupplierAccess(resp.supplier);
+    });
+
+    if (visible.length) setActivePageId(visible[0].id);
+  }, [activeProject, activePage, isGuest]);
+
+
+  // Redirect supplier guests away from Project Home (master page)
+  useEffect(() => {
+    if (!activeProject || !activeProject.pages?.length) return;
+    if (!isGuest) return;
+    const ap = activeProject;
+    const current = ap.pages.find((p) => p.id === activePageId) || ap.pages[0];
+    if (!current?.meta?.isMaster) return;
+
+    // pick first page whose responsibility supplier matches the user's roles
+    const firstAllowed = (ap.pages || []).find((pg) => {
+      if (pg.meta?.isMaster) return false;
+      const resp = (ap.responsibilities || []).find((r) => r.id === pg.meta?.responsibilityId);
+      return resp && hasSupplierAccess(resp.supplier);
+    });
+
+    if (firstAllowed) setActivePageId(firstAllowed.id);
+  }, [isGuest, activeProject?.id, activePageId]);
   /* ---- update helpers ---- */
   function updateProject(projectId, patch) {
     setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...patch } : p)));
@@ -1144,6 +1251,38 @@ export default function App() {
     };
   }, [summaryItems, view, activeProject, activePage, projects]);
 
+  function applyServerState(serverState) {
+    if (!serverState || typeof serverState !== "object") return;
+    if (Number.isFinite(serverState.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(serverState.globalDaysReqToStatusA);
+    if (Number.isFinite(serverState.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(serverState.globalDaysStatusAToFirstIssue);
+    if (Array.isArray(serverState.projects)) setProjects(serverState.projects);
+    if (typeof serverState.activeProjectId === "string") setActiveProjectId(serverState.activeProjectId);
+    if (typeof serverState.activePageId === "string") setActivePageId(serverState.activePageId);
+    if (serverState.view && Object.values(VIEW).includes(serverState.view)) setView(serverState.view);
+  }
+
+  async function tickMilestone({ projectId, pageId, rowId, field }) {
+    const lockedField = field === "statusADone" ? "statusADone" : "firstIssueDone";
+
+    if (!isAdmin) {
+      const ok = window.confirm("Once ticked this will be locked and only administrator can unlock.");
+      if (!ok) return;
+    }
+
+    const res = await apiPostJSON("/api/tick", { projectId, pageId, rowId, field: lockedField });
+    if (res?.state) applyServerState(res.state);
+  }
+
+  async function addRowComment({ projectId, pageId, rowId, name, text }) {
+    const res = await apiPostJSON("/api/comment", { projectId, pageId, rowId, name, text });
+    if (res?.state) applyServerState(res.state);
+  }
+
+  async function adminUnlock({ projectId, pageId, rowId, field }) {
+    const res = await apiPostJSON("/api/unlock", { projectId, pageId, rowId, field });
+    if (res?.state) applyServerState(res.state);
+  }
+
   async function sendChat() {
     const text = chatInput.trim();
     if (!text || chatBusy) return;
@@ -1508,6 +1647,17 @@ export default function App() {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
+          isAdmin={isAdmin}
+          isGuest={isGuest}
+          hasSupplierAccess={hasSupplierAccess}
+          authUser={authUser}
+          currentSupplier={currentSupplier}
+          tickMilestone={tickMilestone}
+          addRowComment={addRowComment}
+          adminUnlock={adminUnlock}
+          commentModal={commentModal}
+          setCommentModal={setCommentModal}
+          resetChat={resetChat}
         />
       </div>
 
@@ -1522,6 +1672,29 @@ export default function App() {
         endRef={chatEndRef}
         status={chatStatus}
         onReset={resetChat}
+      />
+
+      <CommentModal
+        open={commentModal.open}
+        row={(() => {
+          try {
+            const proj = activeProject;
+            const pg = activePage;
+            const r = (pg?.rows || []).find((x) => x.id === commentModal.rowId);
+            return { project: proj, page: pg, row: r };
+          } catch {
+            return { project: null, page: null, row: null };
+          }
+        })()}
+        name={commentModal.name}
+        setName={(v) => setCommentModal((m) => ({ ...m, name: v }))}
+        text={commentModal.text}
+        setText={(v) => setCommentModal((m) => ({ ...m, text: v }))}
+        onClose={() => setCommentModal({ open: false, rowId: null, name: "", text: "" })}
+        onSave={async ({ projectId, pageId, rowId, name, text }) => {
+          await addRowComment({ projectId, pageId, rowId, name, text });
+          setCommentModal((m) => ({ ...m, open: false, rowId: null, text: "" }));
+        }}
       />
     </>
   );
@@ -1557,43 +1730,28 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
+    isAdmin,
+    isGuest,
+    hasSupplierAccess,
+    authUser,
+    currentSupplier,
+    tickMilestone,
+    addRowComment,
+    adminUnlock,
+    commentModal,
+    setCommentModal,
   } = props;
 
-  // ----- Row comments (tracker pages) -----
-  const [commentModal, setCommentModal] = useState({
-    open: false,
-    rowId: null,
-    name: "",
-    text: "",
-  });
+  const visiblePages = useMemo(() => {
+    const pages = activeProject?.pages || [];
+    if (isAdmin || !isGuest) return pages;
 
-  const activeCommentRow = useMemo(() => {
-    if (!commentModal.open || !commentModal.rowId) return null;
-    return (activePage?.rows || []).find((r) => r.id === commentModal.rowId) || null;
-  }, [commentModal.open, commentModal.rowId, activePage?.rows]);
-
-  function openComments(rowId) {
-    setCommentModal({ open: true, rowId, name: "", text: "" });
-  }
-
-  function closeComments() {
-    setCommentModal({ open: false, rowId: null, name: "", text: "" });
-  }
-
-  function saveComment() {
-    const rowId = commentModal.rowId;
-    const name = clean(commentModal.name);
-    const text = clean(commentModal.text);
-    if (!rowId || !name || !text) return;
-
-    const todayISO = isoToday();
-    const newComment = { id: uid(), name, dateISO: todayISO, text };
-
-    const row = (activePage?.rows || []).find((r) => r.id === rowId) || null;
-    const existing = Array.isArray(row?.comments) ? row.comments : [];
-    updateRow(rowId, { comments: [...existing, newComment] });
-    closeComments();
-  }
+    return pages.filter((pg) => {
+      if (pg.meta?.isMaster) return false;
+      const resp = (activeProject?.responsibilities || []).find((r) => r.id === pg.meta?.responsibilityId);
+      return resp && hasSupplierAccess(resp.supplier);
+    });
+  }, [activeProject, isAdmin, isGuest, hasSupplierAccess]);
 
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
@@ -1627,7 +1785,7 @@ function ProjectView(props) {
           onChange={(e) => setActivePageId(e.target.value)}
           disabled={!activeProject}
         >
-          {(activeProject?.pages || []).map((pg) => (
+          {(visiblePages || []).map((pg) => (
             <option key={pg.id} value={pg.id}>
               {pg.name}
               {pg.meta?.isMaster ? " (Project Home)" : pg.meta?.generated ? " (Auto)" : ""}
@@ -1911,9 +2069,11 @@ function ProjectView(props) {
                 <TrafficKeyDotsOnly />
               </div>
             </div>
-            <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
-              + Manual row
-            </button>
+            {!isGuest ? (
+              <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
+                + Manual row
+              </button>
+            ) : null}
           </div>
 
           <div style={styles.tableWrap}>
@@ -1929,8 +2089,8 @@ function ProjectView(props) {
                   <th style={styles.thMed}>Req</th>
                   <th style={styles.thMed}>Status A</th>
                   <th style={styles.thMed}>First</th>
-                  <th style={styles.thTf}>TF</th>
                   <th style={styles.thSmall}>💬</th>
+                  <th style={styles.thTf}>TF</th>
                   <th style={styles.thSmall}></th>
                 </tr>
               </thead>
@@ -1957,7 +2117,7 @@ function ProjectView(props) {
                             type="checkbox"
                             checked={!!r.completed}
                             onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
-                            disabled={r.notRequired}
+                            disabled={r.notRequired || isGuest}
                           />
                         )}
                       </td>
@@ -1967,6 +2127,7 @@ function ProjectView(props) {
                           <input
                             type="checkbox"
                             checked={!!r.notRequired}
+                            disabled={isGuest}
                             onChange={(e) => {
                               const checked = e.target.checked;
                               updateRow(r.id, {
@@ -1988,7 +2149,7 @@ function ProjectView(props) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.item}
                             onChange={(e) => updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } })}
-                            disabled={r.notRequired}
+                            disabled={r.notRequired || isGuest}
                           />
                         )}
                       </td>
@@ -1999,7 +2160,7 @@ function ProjectView(props) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.anchorKey}
                             onChange={(e) => updateRow(r.id, { anchorKey: e.target.value })}
-                            disabled={r.notRequired}
+                            disabled={r.notRequired || isGuest}
                           >
                             {ANCHORS.map((a) => (
                               <option key={a.key} value={a.key}>
@@ -2017,7 +2178,7 @@ function ProjectView(props) {
                             type="date"
                             value={r.anchorDateISO}
                             onChange={(e) => updateRow(r.id, { anchorDateISO: e.target.value })}
-                            disabled={r.notRequired}
+                            disabled={r.notRequired || isGuest}
                           />
                         )}
                       </td>
@@ -2031,9 +2192,12 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.statusA}
                           checked={!!r.statusADone}
-                          onChange={(checked) => updateRow(r.id, { statusADone: checked })}
+                          locked={!!r?.locks?.statusADone}
+                          onTick={() => tickMilestone({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "statusADone" })}
+                          canUnlock={isAdmin}
+                          onUnlock={() => adminUnlock({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "statusADone" })}
                           overdue={!!r._overdue?.overdueA}
-                          disabled={disabled}
+                          disabled={disabled || isGuest}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2043,11 +2207,30 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.firstIssue}
                           checked={!!r.firstIssueDone}
-                          onChange={(checked) => updateRow(r.id, { firstIssueDone: checked })}
+                          locked={!!r?.locks?.firstIssueDone}
+                          onTick={() => tickMilestone({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "firstIssueDone" })}
+                          canUnlock={isAdmin}
+                          onUnlock={() => adminUnlock({ projectId: activeProject.id, pageId: activePage.id, rowId: r.id, field: "firstIssueDone" })}
                           overdue={!!r._overdue?.overdueF}
-                          disabled={disabled}
+                          disabled={disabled || isGuest}
                           muted={r.notRequired}
                         />
+                      </td>
+
+                      <td style={styles.tdCenter}>
+                        {r.kind === "header" ? null : (
+                          <button
+                            style={styles.commentBtn}
+                            onClick={() => {
+                              const defaultName = authUser?.userDetails || "";
+                              setCommentModal({ open: true, rowId: r.id, name: defaultName, text: "" });
+                            }}
+                            title="Add / view comments"
+                          >
+                            💬
+                            {Array.isArray(r.comments) && r.comments.length ? <span style={styles.commentCount}>{r.comments.length}</span> : null}
+                          </button>
+                        )}
                       </td>
 
                       <td style={styles.td}>
@@ -2060,7 +2243,7 @@ function ProjectView(props) {
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
                               onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired}
+                              disabled={r.notRequired || isGuest}
                               title="Req→A"
                             />
                             <input
@@ -2070,7 +2253,7 @@ function ProjectView(props) {
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
                               onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired}
+                              disabled={r.notRequired || isGuest}
                               title="A→First"
                             />
                           </div>
@@ -2079,19 +2262,7 @@ function ProjectView(props) {
 
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : (
-                          <button
-                            style={styles.commentBtn}
-                            onClick={() => openComments(r.id)}
-                            title="Add / view comments"
-                          >
-                            💬 <span style={styles.commentCount}>{Array.isArray(r.comments) ? r.comments.length : 0}</span>
-                          </button>
-                        )}
-                      </td>
-
-                      <td style={styles.tdCenter}>
-                        {r.kind === "header" ? null : (
-                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
+                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row" disabled={isGuest}>
                             ✕
                           </button>
                         )}
@@ -2102,97 +2273,6 @@ function ProjectView(props) {
               </tbody>
             </table>
           </div>
-
-          {/* Comments modal (with history) */}
-          {commentModal.open ? (
-            <div style={styles.modalOverlay} onMouseDown={closeComments}>
-              <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontWeight: 900, fontSize: 14 }}>Comments</div>
-                    <div style={styles.muted}>{activePage?.name || ""}</div>
-                  </div>
-                  <button style={styles.iconBtn} onClick={closeComments} title="Close">
-                    ✕
-                  </button>
-                </div>
-
-                <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                  {/* History */}
-                  <div style={styles.commentHistoryBox}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                      <div style={{ fontWeight: 800, fontSize: 12 }}>History</div>
-                      <div style={styles.muted}>
-                        {Array.isArray(activeCommentRow?.comments) ? activeCommentRow.comments.length : 0} total
-                      </div>
-                    </div>
-
-                    <div style={styles.commentHistoryList}>
-                      {Array.isArray(activeCommentRow?.comments) && activeCommentRow.comments.length ? (
-                        activeCommentRow.comments
-                          .slice()
-                          .sort((a, b) => String(b.dateISO || "").localeCompare(String(a.dateISO || "")))
-                          .map((c) => (
-                            <div key={c.id || `${c.name}-${c.dateISO}-${c.text}`} style={styles.commentItem}>
-                              <div style={styles.commentMeta}>
-                                <span style={{ fontWeight: 900 }}>{c.name || "—"}</span>
-                                <span style={styles.commentMetaSep}>•</span>
-                                <span>{c.dateISO || "—"}</span>
-                              </div>
-                              <div style={styles.commentText}>{c.text || ""}</div>
-                            </div>
-                          ))
-                      ) : (
-                        <div style={styles.muted}>No comments yet.</div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Add new */}
-                  <div style={styles.commentFormGrid}>
-                    <label style={styles.label}>
-                      Name
-                      <input
-                        style={styles.input}
-                        value={commentModal.name}
-                        onChange={(e) => setCommentModal((s) => ({ ...s, name: e.target.value }))}
-                        placeholder="Your name"
-                      />
-                    </label>
-
-                    <label style={styles.label}>
-                      Date
-                      <input style={styles.inputMutedReadOnly} value={isoToday()} readOnly />
-                    </label>
-                  </div>
-
-                  <label style={styles.label}>
-                    Comment
-                    <textarea
-                      style={styles.textarea}
-                      value={commentModal.text}
-                      onChange={(e) => setCommentModal((s) => ({ ...s, text: e.target.value }))}
-                      placeholder="Write a comment..."
-                      rows={4}
-                    />
-                  </label>
-
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-                    <button style={styles.secondaryBtn} onClick={closeComments}>
-                      Close
-                    </button>
-                    <button
-                      style={styles.primaryBtn}
-                      onClick={saveComment}
-                      disabled={!clean(commentModal.name) || !clean(commentModal.text)}
-                    >
-                      Save comment
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
         </div>
       )}
     </div>
@@ -2217,9 +2297,12 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
     </div>
   );
 }
-function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, muted }) {
+function MilestoneCell({ isHeader, value, checked, locked, onTick, canUnlock, onUnlock, overdue, disabled, muted }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
   const empty = !value;
+  const isLocked = !!locked;
+  const checkboxDisabled = !!disabled || empty || isLocked;
+
   return (
     <div style={styles.milestoneCell}>
       <div
@@ -2233,7 +2316,26 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
       >
         {empty ? "—" : value}
       </div>
-      <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {isLocked ? <span title="Locked">🔒</span> : null}
+        {isLocked && canUnlock ? (
+          <button type="button" style={styles.unlockBtn} onClick={onUnlock} title="Unlock (admin only)">
+            Unlock
+          </button>
+        ) : null}
+        <input
+          type="checkbox"
+          checked={!!checked}
+          onChange={(e) => {
+            const next = !!e.target.checked;
+            if (!next) return; // no uncheck; use Unlock if admin
+            if (isLocked || checkboxDisabled) return;
+            onTick?.();
+          }}
+          disabled={checkboxDisabled}
+        />
+      </div>
     </div>
   );
 }
@@ -2252,6 +2354,105 @@ function FilterPill({ label, active, onClick }) {
       {label}
     </button>
   );
+
+
+function CommentModal({ open, row, isGuest, isAdmin, authUser, onClose, onSave }) {
+  const [name, setName] = useState("");
+  const [text, setText] = useState("");
+  const todayISO = isoToday();
+
+  useEffect(() => {
+    if (!open) return;
+    const defaultName = authUser?.userDetails || "";
+    setName(defaultName);
+    setText("");
+  }, [open, authUser]);
+
+  if (!open) return null;
+
+  const comments = Array.isArray(row?.comments) ? row.comments : [];
+
+  return (
+    <div style={styles.modalBackdrop} onMouseDown={onClose}>
+      <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div style={styles.modalHeader}>
+          <div>
+            <div style={styles.modalTitle}>Comments</div>
+            <div style={styles.modalSub}>{row?.item || ""}</div>
+          </div>
+          <button style={styles.iconBtn} onClick={onClose} title="Close">
+            ✕
+          </button>
+        </div>
+
+        <div style={styles.modalBody}>
+          <div style={styles.modalFormRow}>
+            <label style={styles.label}>
+              Your name
+              <input style={styles.input} value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
+            </label>
+            <label style={styles.label}>
+              Date
+              <input style={styles.input} value={todayISO} disabled />
+            </label>
+          </div>
+
+          <label style={styles.label}>
+            Comment
+            <textarea
+              style={{ ...styles.input, minHeight: 90, resize: "vertical" }}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Write your comment…"
+            />
+          </label>
+
+          <div style={styles.modalActions}>
+            <button style={styles.secondaryBtn} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              style={styles.primaryBtn}
+              onClick={() => onSave({ name: name.trim(), dateISO: todayISO, text: text.trim() })}
+              disabled={!name.trim() || !text.trim()}
+            >
+              Save (locks)
+            </button>
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>History</div>
+            {!comments.length ? (
+              <div style={styles.muted}>No comments yet.</div>
+            ) : (
+              <div style={styles.commentHistory}>
+                {comments
+                  .slice()
+                  .reverse()
+                  .map((c, idx) => (
+                    <div key={c.id || idx} style={styles.commentItem}>
+                      <div style={styles.commentMeta}>
+                        <span style={{ fontWeight: 900 }}>{c.name || "—"}</span>
+                        <span style={styles.muted}>{c.date || c.dateISO || ""}</span>
+                      </div>
+                      <div style={{ whiteSpace: "pre-wrap" }}>{c.text}</div>
+                      {c.locked ? <div style={styles.commentLocked}>Locked</div> : null}
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+
+          {isGuest ? (
+            <div style={{ marginTop: 10, fontSize: 12, color: "#6B7280" }}>
+              Guest access: you can add comments and tick milestones on your supplier page. Edits are locked after saving.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
 }
 
 /* ---------- styles ---------- */
@@ -2367,34 +2568,17 @@ const styles = {
   smallBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
   iconBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer" },
 
-  commentBtn: {
-    background: "#FFFFFF",
-    color: "#111827",
-    border: "1px solid #D1D5DB",
-    borderRadius: 12,
-    padding: "8px 10px",
-    fontSize: 12,
-    cursor: "pointer",
-    fontWeight: 900,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    minWidth: 62,
-  },
-  commentCount: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: 18,
-    height: 18,
-    padding: "0 6px",
-    borderRadius: 999,
-    border: "1px solid #E5E7EB",
-    background: "#F9FAFB",
-    fontSize: 12,
-    fontWeight: 900,
-  },
+  commentBtn: { position: "relative", background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", width: 48, height: 34 },
+  commentCount: { position: "absolute", top: -6, right: -6, background: "#111827", color: "#FFFFFF", borderRadius: 999, fontSize: 10, padding: "2px 6px", lineHeight: 1 },
+
+  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 9999 },
+  modalCard: { width: "100%", maxWidth: 600, background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, boxShadow: "0 20px 60px rgba(17,24,39,0.25)", padding: 14 },
+  modalTop: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 },
+  textarea: { width: "100%", minHeight: 110, border: "1px solid #D1D5DB", borderRadius: 12, padding: "10px 10px", fontSize: 12, outline: "none", resize: "vertical" },
+  divider: { height: 1, background: "#E5E7EB", margin: "12px 0" },
+  commentItem: { border: "1px solid #E5E7EB", borderRadius: 12, padding: 10, background: "#FFFFFF" },
+  lockChip: { display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 999, border: "1px solid #E5E7EB", background: "#FFFFFF", fontSize: 12 },
+  unlockBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "6px 8px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
 
   badgeBase: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 900, border: "1px solid transparent", whiteSpace: "nowrap" },
   badgeOverdue: { background: "#FEF2F2", color: "#991B1B", borderColor: "#FCA5A5" },
@@ -2437,77 +2621,4 @@ const styles = {
   projectHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 },
   projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
   projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
-
-  // --- Comments modal ---
-  modalOverlay: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(17,24,39,0.45)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 16,
-    zIndex: 9999,
-  },
-  modalCard: {
-    width: "min(720px, 100%)",
-    background: "#FFFFFF",
-    border: "1px solid #E5E7EB",
-    borderRadius: 16,
-    padding: 14,
-    boxShadow: "0 20px 60px rgba(17,24,39,0.2)",
-  },
-  textarea: {
-    width: "100%",
-    boxSizing: "border-box",
-    border: "1px solid #D1D5DB",
-    borderRadius: 12,
-    padding: "10px 10px",
-    fontSize: 12,
-    outline: "none",
-    background: "#FFFFFF",
-    resize: "vertical",
-  },
-  inputMutedReadOnly: {
-    width: "100%",
-    boxSizing: "border-box",
-    border: "1px solid #E5E7EB",
-    borderRadius: 12,
-    padding: "8px 10px",
-    fontSize: 12,
-    outline: "none",
-    background: "#F3F4F6",
-    color: "#6B7280",
-  },
-  commentHistoryBox: {
-    border: "1px solid #E5E7EB",
-    borderRadius: 14,
-    padding: 10,
-    background: "#FFFFFF",
-  },
-  commentHistoryList: {
-    marginTop: 8,
-    display: "grid",
-    gap: 8,
-    maxHeight: 220,
-    overflow: "auto",
-    paddingRight: 4,
-  },
-  commentItem: {
-    border: "1px solid #F3F4F6",
-    borderRadius: 12,
-    padding: 10,
-    background: "#FAFAFA",
-  },
-  commentMeta: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    fontSize: 12,
-    color: "#374151",
-    marginBottom: 6,
-  },
-  commentMetaSep: { color: "#9CA3AF" },
-  commentText: { fontSize: 12, color: "#111827", whiteSpace: "pre-wrap", wordBreak: "break-word" },
-  commentFormGrid: { display: "grid", gap: 10, gridTemplateColumns: "1fr 180px" },
 };
