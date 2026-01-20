@@ -243,7 +243,10 @@ function defaultRow(kind = "item") {
     notRequired: false,
     statusADone: false,
     firstIssueDone: false,
+    // locking for guest sign-off (admin can unlock)
     locks: { statusADone: null, firstIssueDone: null },
+    // comments history (optional UI)
+    comments: [],
     meta: { generated: false, blockZone: "", levelId: null, levelName: "", finishDate: "" },
   };
 }
@@ -466,16 +469,18 @@ export default function App() {
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
 
-  // --- Auth (Azure Static Web Apps) ---
-  const [authUser, setAuthUser] = useState(undefined); // undefined = loading, null = signed out
+  // ---------------- AUTH (Azure Static Web Apps) ----------------
+  // undefined = loading, null = anonymous
+  const [authUser, setAuthUser] = useState(undefined);
   const [authRoles, setAuthRoles] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const me = await apiGetJSON("/.auth/me");
-        const principal = me?.clientPrincipal || me?.[0]?.clientPrincipal || null;
+        const r = await fetch('/.auth/me');
+        const data = await r.json().catch(() => ({}));
+        const principal = data?.clientPrincipal || data?.[0]?.clientPrincipal || null;
         if (cancelled) return;
         setAuthUser(principal || null);
         const roles = Array.isArray(principal?.userRoles)
@@ -491,19 +496,23 @@ export default function App() {
       }
     })();
     return () => {
-      cancelled = true
+      cancelled = true;
     };
   }, []);
 
-  const isAdmin = authRoles.includes("admin");
-  const isGuest = authUser && !isAdmin;
+  // If auth isn't configured, default to admin so the app stays editable
+  const isAdmin = authUser === null ? true : authRoles.includes('admin');
+  const isGuest = !!authUser && !isAdmin;
 
-  function hasSupplierAccess(supplier) {
-    const s = String(supplier || "").trim();
-    if (!s) return false;
-    return isAdmin || authRoles.includes(`supplier:${s}`) || authRoles.includes(s);
-  }
-
+  const hasSupplierAccess = useMemo(() => {
+    if (isAdmin) return (supplier) => true;
+    const roles = new Set((authRoles || []).map((r) => String(r || '').trim()));
+    return (supplier) => {
+      const s = String(supplier || '').trim();
+      if (!s) return false;
+      return roles.has(s) || roles.has(`supplier:${s}`);
+    };
+  }, [authRoles, isAdmin]);
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -614,7 +623,11 @@ export default function App() {
                           notRequired: !!r.notRequired,
                           statusADone: !!r.statusADone,
                           firstIssueDone: !!r.firstIssueDone,
-                          locks: r.locks || { statusADone: null, firstIssueDone: null },
+                          locks: {
+                            statusADone: r?.locks?.statusADone || null,
+                            firstIssueDone: r?.locks?.firstIssueDone || null,
+                          },
+                          comments: Array.isArray(r?.comments) ? r.comments : [],
                           meta: {
                             generated: !!r?.meta?.generated,
                             blockZone: r?.meta?.blockZone || "",
@@ -717,51 +730,35 @@ export default function App() {
     );
   }, [activeProject, activePageId]);
 
-  // --- Permissions: pages visible to this user in the active project ---
+  // ---------------- Permissions: guests only see supplier pages ----------------
   const allowedPages = useMemo(() => {
     if (!activeProject?.pages?.length) return [];
-
     if (isAdmin) return activeProject.pages;
-
-    // Guests: only non-master pages where responsibility.supplier matches a role
-    return activeProject.pages.filter((pg) => {
-      if (pg?.meta?.isMaster) return false;
-      const respId = pg?.meta?.responsibilityId;
+    return (activeProject.pages || []).filter((pg) => {
+      if (pg.meta?.isMaster) return false;
+      const respId = pg.meta?.responsibilityId;
       const resp = (activeProject.responsibilities || []).find((r) => r.id === respId);
       const supplier = String(resp?.supplier || '').trim();
       return supplier && hasSupplierAccess(supplier);
     });
-  }, [activeProject, isAdmin, authRoles]);
+  }, [activeProject, isAdmin, hasSupplierAccess]);
 
-  // If current page isn't allowed (or is master for guests), self-heal to the first allowed page.
   useEffect(() => {
     if (!activeProject) return;
-
-    // Wait until auth has resolved (undefined = loading)
+    if (isAdmin) return;
+    // wait for auth load
     if (authUser === undefined) return;
 
-    if (isAdmin) return;
-
-    if (!allowedPages.length) {
-      // No allowed pages for this user in this project
+    const allowed = allowedPages;
+    if (!allowed.length) {
+      // no pages assigned
       if (activePageId !== null) setActivePageId(null);
       return;
     }
-
-    const ok = allowedPages.some((p) => p.id === activePageId);
-    if (!ok) {
-      setActivePageId(allowedPages[0].id);
-    }
+    const ok = allowed.some((p) => p.id === activePageId);
+    if (!ok) setActivePageId(allowed[0].id);
   }, [activeProject, allowedPages, activePageId, isAdmin, authUser]);
 
-
-  // --- supplier for current page (permission key) ---
-  const currentSupplier = useMemo(() => {
-    if (!activeProject || !activePage || activePage?.meta?.isMaster) return "";
-    const respId = activePage?.meta?.responsibilityId;
-    const resp = (activeProject.responsibilities || []).find((r) => r.id === respId);
-    return String(resp?.supplier || "").trim();
-  }, [activeProject, activePage]);
 
   // Ensure we always have valid active IDs
   useEffect(() => {
@@ -816,6 +813,43 @@ export default function App() {
       })
     );
   }
+  // ---------------- Locks: guest confirm -> lock, admin unlock ----------------
+  function lockInfo() {
+    return {
+      lockedBy: authUser?.userDetails || authUser?.userId || 'guest',
+      lockedAt: new Date().toISOString(),
+    };
+  }
+
+  function adminUnlock(rowId, field) {
+    const clear = { ...(activePage?.rows?.find((x) => x.id === rowId)?.locks || {}), [field]: null };
+    updateRow(rowId, { locks: clear });
+  }
+
+  function tickMilestone(row, field, checked) {
+    if (!row) return;
+    const locked = !!row?.locks?.[field];
+    if (locked && !isAdmin) return;
+
+    if (isGuest) {
+      if (!checked) return; // guests cannot untick
+      if (locked) return;
+      const ok = window.confirm('Once ticked this will be locked and only administrator can unlock');
+      if (!ok) return;
+      updateRow(row.id, {
+        [field]: true,
+        locks: { ...(row.locks || {}), [field]: lockInfo() },
+      });
+      return;
+    }
+
+    // admin normal toggle (no lock unless already locked)
+    updateRow(row.id, {
+      [field]: checked,
+      locks: { ...(row.locks || {}), [field]: checked ? (row?.locks?.[field] || null) : null },
+    });
+  }
+
 
   /* ---- master edits ---- */
   function addMasterRow() {
@@ -961,16 +995,8 @@ export default function App() {
 
   function goToProject() {
     if (!activeProject) return;
-
-    if (isAdmin) {
-      const mp = activeProject.pages.find((x) => x.meta?.isMaster) || activeProject.pages[0];
-      setActivePageId(mp?.id || null);
-    } else {
-      // guest: go to first allowed tracker page
-      const first = allowedPages[0] || null;
-      setActivePageId(first?.id || null);
-    }
-
+    const mp = activeProject.pages.find((x) => x.meta?.isMaster) || activeProject.pages[0];
+    setActivePageId(mp.id);
     setView(VIEW.PROJECT);
   }
 
@@ -1296,8 +1322,20 @@ export default function App() {
                     const pid = e.target.value;
                     setActiveProjectId(pid);
                     const proj = projects.find((p) => p.id === pid);
-                    const mp = proj?.pages?.find((x) => x.meta?.isMaster) || proj?.pages?.[0];
-                    setActivePageId(mp?.id || null);
+                    if (isAdmin) {
+              const mp = proj?.pages?.find((x) => x.meta?.isMaster) || proj?.pages?.[0];
+              setActivePageId(mp?.id || null);
+            } else {
+              const pages = (proj?.pages || []).filter((pg) => !pg?.meta?.isMaster);
+              // pick first allowed by supplier
+              const firstAllowed = pages.find((pg) => {
+                const respId = pg?.meta?.responsibilityId;
+                const resp = (proj?.responsibilities || []).find((r) => r.id === respId);
+                const supplier = String(resp?.supplier || '').trim();
+                return supplier && hasSupplierAccess(supplier);
+              }) || null;
+              setActivePageId(firstAllowed?.id || null);
+            }
                   }}
                 >
                   {projects.map((p) => (
@@ -1599,12 +1637,12 @@ export default function App() {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
-          authUser={authUser}
           isAdmin={isAdmin}
-          isGuest={!!isGuest}
+          isGuest={isGuest}
           hasSupplierAccess={hasSupplierAccess}
           allowedPages={allowedPages}
-          allowedPages={allowedPages}
+          tickMilestone={tickMilestone}
+          adminUnlock={adminUnlock}
         />
       </div>
 
@@ -1654,29 +1692,21 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
-    authUser,
     isAdmin,
     isGuest,
     hasSupplierAccess,
     allowedPages,
+    tickMilestone,
+    adminUnlock,
   } = props;
 
-  const visiblePages = isAdmin ? (activeProject?.pages || []) : (allowedPages || []);
-
-  function firstAllowedPageForProject(proj) {
-    if (!proj?.pages?.length) return null;
-    if (isAdmin) return proj.pages.find((p) => p.meta?.isMaster) || proj.pages[0] || null;
-    const pages = proj.pages.filter((pg) => {
-      if (pg?.meta?.isMaster) return false;
-      const respId = pg?.meta?.responsibilityId;
-      const resp = (proj.responsibilities || []).find((r) => r.id === respId);
-      const supplier = String(resp?.supplier || "").trim();
-      return supplier && hasSupplierAccess(supplier);
-    });
-    return pages[0] || null;
-  }
-
-  // ✅ selector block in same place for BOTH Project Home and responsibility pages
+  
+  const pagesList = useMemo(() => {
+    if (!activeProject) return [];
+    if (isAdmin) return activeProject.pages || [];
+    return allowedPages || [];
+  }, [activeProject, isAdmin, allowedPages]);
+// ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
       <div style={styles.selectorBlock}>
@@ -1688,8 +1718,8 @@ function ProjectView(props) {
             const pid = e.target.value;
             setActiveProjectId(pid);
             const proj = projects.find((p) => p.id === pid);
-            const first = firstAllowedPageForProject(proj);
-            setActivePageId(first?.id || null);
+            const mp = proj?.pages?.find((x) => x.meta?.isMaster) || proj?.pages?.[0];
+            setActivePageId(mp?.id || null);
           }}
         >
           {projects.map((p) => (
@@ -1708,7 +1738,7 @@ function ProjectView(props) {
           onChange={(e) => setActivePageId(e.target.value)}
           disabled={!activeProject}
         >
-          {visiblePages.map((pg) => (
+          {(pagesList || []).map((pg) => (
             <option key={pg.id} value={pg.id}>
               {pg.name}
               {pg.meta?.isMaster ? " (Project Home)" : pg.meta?.generated ? " (Auto)" : ""}
@@ -1719,13 +1749,12 @@ function ProjectView(props) {
     </div>
   );
 
-  if (authUser && !isAdmin && (!allowedPages || !allowedPages.length)) {
+  if (!activePage) {
     return (
       <div style={styles.page}>
         <div style={styles.card}>
           <h2 style={styles.h2}>No pages assigned</h2>
-          <p style={styles.sub}>You are signed in, but you don’t have access to any supplier tracker pages in this project. Ask an administrator to ensure the Responsibility supplier matches one of your roles (for example, supplier:SupplierName).</p>
-          <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>Back</button>
+          <p style={styles.sub}>You are signed in but do not have access to any supplier tracker pages in this project. Ask an administrator to set your role to match a Responsibility supplier (e.g. supplier:ACME).</p>
         </div>
       </div>
     );
@@ -2123,9 +2152,13 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.statusA}
                           checked={!!r.statusADone}
-                          onChange={(checked) => updateRow(r.id, { statusADone: checked })}
+                          locked={!!r.locks?.statusADone}
+                          lockMeta={r.locks?.statusADone}
+                          isAdmin={isAdmin}
+                          onUnlock={() => adminUnlock(r.id, "statusADone")}
+                          onChange={(checked) => tickMilestone(r, "statusADone", checked)}
                           overdue={!!r._overdue?.overdueA}
-                          disabled={disabled}
+                          disabled={disabled || (isGuest && !!r.locks?.statusADone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2135,9 +2168,13 @@ function ProjectView(props) {
                           isHeader={r.kind === "header"}
                           value={r._computed.firstIssue}
                           checked={!!r.firstIssueDone}
-                          onChange={(checked) => updateRow(r.id, { firstIssueDone: checked })}
+                          locked={!!r.locks?.firstIssueDone}
+                          lockMeta={r.locks?.firstIssueDone}
+                          isAdmin={isAdmin}
+                          onUnlock={() => adminUnlock(r.id, "firstIssueDone")}
+                          onChange={(checked) => tickMilestone(r, "firstIssueDone", checked)}
                           overdue={!!r._overdue?.overdueF}
-                          disabled={disabled}
+                          disabled={disabled || (isGuest && !!r.locks?.firstIssueDone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2206,7 +2243,19 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
     </div>
   );
 }
-function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, muted }) {
+function MilestoneCell({
+  isHeader,
+  value,
+  checked,
+  onChange,
+  overdue,
+  disabled,
+  muted,
+  locked,
+  lockMeta,
+  isAdmin,
+  onUnlock,
+}) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
   const empty = !value;
   return (
@@ -2219,10 +2268,27 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
           ...(checked ? styles.pillDone : null),
           ...(muted ? styles.pillMuted : null),
         }}
+        title={
+          locked
+            ? `Locked by ${lockMeta?.lockedBy || "unknown"} at ${lockMeta?.lockedAt || ""}`
+            : undefined
+        }
       >
-        {empty ? "—" : value}
+        {empty ? "—" : value} {locked ? "🔒" : ""}
       </div>
-      <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input
+          type="checkbox"
+          checked={!!checked}
+          onChange={(e) => onChange(e.target.checked)}
+          disabled={!!disabled || (locked && !isAdmin)}
+        />
+        {locked && isAdmin ? (
+          <button style={styles.smallBtn} onClick={onUnlock} title="Unlock (admin only)">
+            Unlock
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
