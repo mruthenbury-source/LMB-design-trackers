@@ -2185,8 +2185,6 @@ function ProjectView(props) {
         </div>
       )}
     </div>
-      </div>
-    </>
   );
 }
 
