@@ -760,14 +760,6 @@ export default function App() {
     }
   }, [activeProject, activePageId]);
 
-  const currentSupplier = useMemo(() => {
-    if (!activeProject || !activePage || activePage?.meta?.isMaster) return "";
-    const respId = activePage?.meta?.responsibilityId;
-    const resp = (activeProject.responsibilities || []).find((r) => r.id === respId);
-    return String(resp?.supplier || "").trim();
-  }, [activeProject, activePage]);
-
-
   // guest cannot view Project Home; auto-jump to their supplier page
   useEffect(() => {
     if (!activeProject || !activePage) return;
