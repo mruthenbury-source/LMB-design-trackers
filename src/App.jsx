@@ -498,10 +498,6 @@ export default function App() {
         onClick={onClick}
         title={s === "error" ? String(error || "Save failed") : "Syncs to Azure Blob automatically"}
         style={{
-          position: "fixed",
-          top: 14,
-          right: 14,
-          zIndex: 9999,
           border: "none",
           borderRadius: 999,
           padding: "8px 12px",
@@ -1465,17 +1461,45 @@ export default function App() {
     }
   }
 
-  /* ---------- VIEW: LANDING ---------- */
-  if (view === VIEW.LANDING) {
+  
+
+// On initial entry/refresh: admins always land on Home (Landing view)
+const didSetHomeRef = useRef(false);
+useEffect(() => {
+  if (authUser === undefined) return;
+  if (!isAdmin) return;
+  if (didSetHomeRef.current) return;
+  didSetHomeRef.current = true;
+  setView(VIEW.LANDING);
+}, [authUser, isAdmin, setView]);
+
+// Avoid a brief flash of the landing page while auth is still loading
+if (authUser === undefined) {
+  return (
+    <div style={styles.shell}>
+      <div style={styles.page}>
+        <div style={styles.card}>
+          <div style={{ fontWeight: 900, marginBottom: 6 }}>Loading…</div>
+          <div style={styles.muted}>Signing you in and loading programme data.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- VIEW: LANDING ---------- */
+  if (view === VIEW.LANDING && !isGuest) {
     return (
       <>
-        <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
               <div>
                 <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
+              </div>
+              <div style={styles.headerButtons}>
+                <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
               </div>
             </div>
 
@@ -1484,7 +1508,7 @@ export default function App() {
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
         <select
           style={{ ...styles.input, width: 260 }}
-          value={activeProject?.id || ""}
+          value={activeProjectId || (visibleProjects?.[0]?.id ?? projects?.[0]?.id ?? "")}
           onChange={(e) => {
             const pid = e.target.value;
             setActiveProjectId(pid);
@@ -1545,7 +1569,8 @@ export default function App() {
           </div>
         </div>
 
-        <ChatOverlay
+        {!isGuest && (
+          <ChatOverlay
           open={chatOpen}
           setOpen={setChatOpen}
           messages={chatMessages}
@@ -1556,16 +1581,16 @@ export default function App() {
           endRef={chatEndRef}
           status={chatStatus}
           onReset={resetChat}
-        />
+          />
+        )}
       </>
     );
   }
 
   /* ---------- VIEW: PROGRAMME SUMMARY (FULL SCREEN) ---------- */
-  if (view === VIEW.GANTT_SUMMARY) {
+  if (view === VIEW.GANTT_SUMMARY && !isGuest) {
     return (
       <>
-        <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
         <div style={styles.fullscreen}>
           <div style={styles.fullTopBar}>
             <div>
@@ -1616,7 +1641,8 @@ export default function App() {
           </div>
         </div>
 
-        <ChatOverlay
+        {!isGuest && (
+          <ChatOverlay
           open={chatOpen}
           setOpen={setChatOpen}
           messages={chatMessages}
@@ -1627,16 +1653,16 @@ export default function App() {
           endRef={chatEndRef}
           status={chatStatus}
           onReset={resetChat}
-        />
+          />
+        )}
       </>
     );
   }
 
   /* ---------- VIEW: SUMMARY ---------- */
-  if (view === VIEW.SUMMARY) {
+  if (view === VIEW.SUMMARY && !isGuest) {
     return (
       <>
-        <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
@@ -1645,6 +1671,7 @@ export default function App() {
                 <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
               </div>
               <div style={styles.headerButtons}>
+                <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
                 <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                   Home
                 </button>
@@ -1762,7 +1789,8 @@ export default function App() {
           </div>
         </div>
 
-        <ChatOverlay
+        {!isGuest && (
+          <ChatOverlay
           open={chatOpen}
           setOpen={setChatOpen}
           messages={chatMessages}
@@ -1773,7 +1801,8 @@ export default function App() {
           endRef={chatEndRef}
           status={chatStatus}
           onReset={resetChat}
-        />
+          />
+        )}
       </>
     );
   }
@@ -1781,13 +1810,14 @@ export default function App() {
   /* ---------- VIEW: PROJECT ---------- */
   return (
     <>
-      <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
       <div style={styles.shell}>
         <ProjectView
           projects={projects}
           visibleProjects={visibleProjects}
           activeProject={activeProject}
+          activeProjectId={activeProjectId}
           activePage={activePage}
+          activePageId={activePageId}
           authUser={authUser}
           isAdmin={isAdmin}
           isGuest={isGuest}
@@ -1820,7 +1850,8 @@ export default function App() {
         />
       </div>
 
-      <ChatOverlay
+      {!isGuest && (
+        <ChatOverlay
         open={chatOpen}
         setOpen={setChatOpen}
         messages={chatMessages}
@@ -1831,7 +1862,8 @@ export default function App() {
         endRef={chatEndRef}
         status={chatStatus}
         onReset={resetChat}
-      />
+        />
+      )}
     </>
   );
 }
@@ -1842,7 +1874,9 @@ function ProjectView(props) {
     projects,
     visibleProjects,
     activeProject,
+    activeProjectId,
     activePage,
+    activePageId,
     authUser,
     isAdmin,
     isGuest,
@@ -2008,7 +2042,7 @@ function tickMilestone(row, field, checked) {
         <div style={styles.sectionTitle}>Project</div>
         <select
           style={{ ...styles.input, width: 260 }}
-          value={activeProject?.id || ""}
+          value={activeProjectId || (visibleProjects?.[0]?.id ?? projects?.[0]?.id ?? "")}
           onChange={(e) => {
             const pid = e.target.value;
             setActiveProjectId(pid);
@@ -2042,7 +2076,7 @@ function tickMilestone(row, field, checked) {
         <div style={styles.sectionTitle}>Pages</div>
         <select
           style={{ ...styles.input, width: 280 }}
-          value={activePage?.id || ""}
+          value={activePageId || (allowedPages?.[0]?.id ?? "")}
           onChange={(e) => setActivePageId(e.target.value)}
           disabled={!activeProject}
         >
@@ -2065,6 +2099,7 @@ function tickMilestone(row, field, checked) {
           <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
         </div>
         <div style={styles.headerButtons}>
+                <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
