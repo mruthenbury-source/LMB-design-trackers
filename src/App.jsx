@@ -39,53 +39,6 @@ function clampInt(v, fallback = 0) {
 function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
-
-/* ---------- Save status pill (header) ---------- */
-function SaveStatusButton({ status, lastSavedAt, error, onClick }) {
-  const formatTime = (d) => {
-    try {
-      if (!d) return "";
-      const dt = typeof d === "string" ? new Date(d) : d;
-      if (!(dt instanceof Date) || Number.isNaN(dt.getTime())) return "";
-      return dt.toLocaleString();
-    } catch {
-      return "";
-    }
-  };
-
-  const s = String(status || "idle");
-  const label =
-    s === "saved"
-      ? `Saved${lastSavedAt ? ` · ${formatTime(lastSavedAt)}` : ""}`
-      : s === "saving"
-        ? "Saving…"
-        : s === "error"
-          ? "Save failed"
-          : "Not saved";
-
-  const bg = s === "saved" ? "#10B981" : s === "saving" ? "#F59E0B" : s === "error" ? "#EF4444" : "#9CA3AF";
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={s === "error" ? String(error || "Save failed") : "Syncs to Azure Blob automatically"}
-      style={{
-        border: "none",
-        borderRadius: 999,
-        padding: "8px 12px",
-        fontWeight: 900,
-        fontSize: 12,
-        color: "white",
-        background: bg,
-        boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
-        cursor: "pointer",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
 function clean(text) {
   return String(text ?? "").trim();
 }
@@ -506,6 +459,10 @@ const VIEW = {
 };
 
 export default function App() {
+  // Boot / hydration
+  const [isHydrating, setIsHydrating] = useState(true);
+  const [hydrateError, setHydrateError] = useState(null);
+
   const [globalDaysReqToStatusA, setGlobalDaysReqToStatusA] = useState(14);
   const [globalDaysStatusAToFirstIssue, setGlobalDaysStatusAToFirstIssue] = useState(28);
 
@@ -515,12 +472,6 @@ export default function App() {
 
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
-
-  /* ---------------- BLOB SAVE INDICATOR ---------------- */
-  const [saveInfo, setSaveInfo] = useState({ status: "idle", lastSavedAt: null, error: null });
-  const saveTimerRef = useRef(null);
-  const lastSavedJsonRef = useRef(null);
-
 
   /* ---------------- AUTH + PERMISSIONS (Azure Static Web Apps) ---------------- */
   const [authUser, setAuthUser] = useState(undefined); // undefined=loading, null=anonymous, object=logged in
@@ -552,6 +503,8 @@ export default function App() {
   }, [authUser]);
 
   const isAdmin = useMemo(() => {
+    // Treat anonymous as admin so the site still works without login
+    if (authUser === null) return true;
     if (!authUser) return false;
     const roles = authRoles.map((r) => String(r || "").toLowerCase());
     return roles.includes("administrator") || roles.includes("admin");
@@ -605,6 +558,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatStatus, setChatStatus] = useState("idle"); // "idle" | "checking" | "ok" | "error"
+  const [chatSearchBackups, setChatSearchBackups] = useState(false);
   const chatEndRef = useRef(null);
   const CHAT_WELCOME = {
     role: "assistant",
@@ -632,17 +586,15 @@ export default function App() {
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
 
-  /* ---- load ---- */
-  useEffect(() => {
-    let cancelled = false;
-
-    async function hydrateFromPayload(parsed) {
-      if (!parsed) return;
+  // Shared hydration routine (used for Blob + localStorage fallback)
+  async function hydrateFromPayload(parsed) {
+    if (!parsed) return;
 
       if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
       if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
-
+  
       if (Array.isArray(parsed.projects) && parsed.projects.length) {
+        // your hydration logic (keep as-is)
         const hydrated = parsed.projects.map((proj) => {
           const master =
             Array.isArray(proj.master) && proj.master.length
@@ -723,75 +675,65 @@ export default function App() {
   
           return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
         });
-
+  
         setProjects(hydrated);
-
+  
         const pid = parsed.activeProjectId || hydrated[0].id;
         setActiveProjectId(pid);
-
+  
         const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
         const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
         setActivePageId(parsed.activePageId || masterPg.id);
       }
-
+  
       if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
       if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
       if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
       if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
-    }
+  }
 
+  /* ---- load (Blob first) ---- */
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
+      setIsHydrating(true);
+      setHydrateError(null);
+
       try {
-        // 1) Prefer Azure Blob state (via API)
-        try {
-          const r = await fetch("/api/state", { method: "GET", cache: "no-store" });
-          if (r.ok) {
-            const data = await r.json().catch(() => ({}));
-            const serverState = data?.state ?? null;
-            if (!cancelled && serverState) {
-              await hydrateFromPayload(serverState);
-              // Store as the "saved" baseline to avoid immediate re-post.
-              try {
-                lastSavedJsonRef.current = JSON.stringify(serverState ?? null);
-                setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
-              } catch {
-                // ignore
-              }
+        // 1) Prefer Blob-backed state via API
+        const res = await fetch("/api/state", { method: "GET", cache: "no-store" });
+        if (!res.ok) throw new Error(`State load failed (${res.status})`);
+        const data = await res.json().catch(() => ({}));
+        const serverState = data?.state ?? null;
 
-              // Optional local fallback
-              try {
-                localStorage.setItem(LS_KEY, JSON.stringify(serverState));
-              } catch {
-                // ignore
-              }
-              return;
-            }
-          }
-        } catch {
-          // ignore and fallback
+        if (!cancelled && serverState) {
+          await hydrateFromPayload(serverState);
+          try {
+            localStorage.setItem(LS_KEY, JSON.stringify(serverState));
+          } catch {}
+          return;
         }
-
-        // 2) Fallback: localStorage
-        try {
-          const raw = localStorage.getItem(LS_KEY);
-          if (!raw) return;
-          const parsed = JSON.parse(raw);
-          if (!cancelled) {
-            await hydrateFromPayload(parsed);
-            try {
-              lastSavedJsonRef.current = JSON.stringify(parsed ?? null);
-              setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
-            } catch {
-              // ignore
-            }
-          }
-        } catch {
-          // ignore
-        }
-      } finally {
-        if (!cancelled) didHydrateRef.current = true;
+      } catch (e) {
+        if (!cancelled) setHydrateError(String(e?.message || e));
       }
-    })();
+
+      // 2) Fallback to localStorage
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (!cancelled && parsed) await hydrateFromPayload(parsed);
+      } catch {
+        // ignore
+      }
+    })()
+      .catch(() => {
+        // ignore
+      })
+      .finally(() => {
+        if (cancelled) return;
+        didHydrateRef.current = true;
+        setIsHydrating(false);
+      });
 
     return () => {
       cancelled = true;
@@ -820,88 +762,6 @@ export default function App() {
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
     } catch {
       // ignore
-    }
-
-    // ✅ Auto-save to Azure Blob (debounced)
-    let json = "";
-    try {
-      json = JSON.stringify(payload ?? null);
-    } catch {
-      json = "";
-    }
-
-    if (json && json === lastSavedJsonRef.current) {
-      // already in sync
-      if (saveInfo.status !== "saved") setSaveInfo((s) => ({ ...s, status: "saved", error: null }));
-      return;
-    }
-
-    setSaveInfo((s) => ({ ...s, status: "saving", error: null }));
-
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(async () => {
-      try {
-        const r = await fetch("/api/state", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ state: payload }),
-        });
-
-        if (!r.ok) {
-          setSaveInfo((s) => ({ status: "error", lastSavedAt: s.lastSavedAt, error: `POST /api/state failed (${r.status})` }));
-          return;
-        }
-
-        lastSavedJsonRef.current = json;
-        setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
-      } catch (e) {
-        setSaveInfo((s) => ({ status: "error", lastSavedAt: s.lastSavedAt, error: String(e?.message || e) }));
-      }
-    }, 800);
-
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
-  }, [
-    globalDaysReqToStatusA,
-    globalDaysStatusAToFirstIssue,
-    projects,
-    activeProjectId,
-    activePageId,
-    view,
-    summaryFilter,
-    summaryProjectId,
-    summarySupplier,
-  ]);
-
-  const forceSaveNow = useCallback(async () => {
-    const payload = {
-      globalDaysReqToStatusA,
-      globalDaysStatusAToFirstIssue,
-      projects,
-      activeProjectId,
-      activePageId,
-      view,
-      summaryFilter,
-      summaryProjectId,
-      summarySupplier,
-    };
-    setSaveInfo((s) => ({ ...s, status: "saving", error: null }));
-    try {
-      const r = await fetch("/api/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: payload }),
-      });
-      if (!r.ok) {
-        setSaveInfo((s) => ({ ...s, status: "error", error: `POST /api/state failed (${r.status})` }));
-        return;
-      }
-      const json = JSON.stringify(payload ?? null);
-      lastSavedJsonRef.current = json;
-      setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
-    } catch (e) {
-      setSaveInfo((s) => ({ ...s, status: "error", error: String(e?.message || e) }));
     }
   }, [
     globalDaysReqToStatusA,
@@ -1225,6 +1085,19 @@ export default function App() {
               const status = r.completed ? "done" : o.overdue ? "overdue" : "ongoing";
               const traffic = trafficForRow(r, dates);
 
+              const comments = Array.isArray(r.comments) ? r.comments : [];
+              const commentsText = comments
+                .map((c) => {
+                  const who = clean(c?.name) || clean(c?.lockedBy) || "";
+                  const when = clean(c?.dateISO) || "";
+                  const txt = clean(c?.text) || "";
+                  return [when, who, txt].filter(Boolean).join(" — ");
+                })
+                .filter(Boolean)
+                .join("\n");
+
+              const totalDurationDays = diffDaysUTC(dates.firstIssue, dates.requiredOnSite);
+
               out.push({
                 projectId: proj.id,
                 projectName: proj.name,
@@ -1236,6 +1109,14 @@ export default function App() {
                 requiredOnSite: dates.requiredOnSite,
                 statusA: dates.statusA,
                 firstIssue: dates.firstIssue,
+                anchorKey: r.anchorKey,
+                anchorDateISO: r.anchorDateISO,
+                daysReqToStatusA: d1,
+                daysStatusAToFirstIssue: d2,
+                totalDurationDays,
+                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
+                commentsText,
+                commentsCount: comments.length,
                 completed: !!r.completed,
                 status,
                 traffic,
@@ -1428,6 +1309,25 @@ export default function App() {
         })),
       },
       bySupplier,
+
+      // Full searchable index for the assistant (includes dates, durations, timeframe and comments)
+      rows: summaryItems.map((x) => ({
+        project: x.projectName,
+        responsibility: x.pageName,
+        supplier: x.supplier || "—",
+        item: x.title,
+        requiredOnSite: x.requiredOnSite,
+        statusA: x.statusA,
+        firstIssue: x.firstIssue,
+        timeframe: x.timeframe,
+        daysReqToStatusA: x.daysReqToStatusA,
+        daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
+        totalDurationDays: x.totalDurationDays,
+        comments: x.commentsText || "",
+        commentsCount: x.commentsCount || 0,
+        status: x.status,
+        traffic: x.traffic,
+      })),
     };
   }, [summaryItems, view, activeProject, activePage, projects]);
 
@@ -1445,7 +1345,7 @@ export default function App() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, context: chatContext }),
+        body: JSON.stringify({ messages: next, context: chatContext, searchBackups: !!chatSearchBackups }),
       });
 
       if (!res.ok) {
@@ -1469,34 +1369,62 @@ export default function App() {
     }
   }
 
-  
+  /* ---------- boot routing + loading screen ---------- */
+  const isBooting = isHydrating || authUser === undefined;
+  const didInitialRouteRef = useRef(false);
 
-// On initial entry/refresh: admins always land on Home (Landing view)
-const didSetHomeRef = useRef(false);
-useEffect(() => {
-  if (authUser === undefined) return;
-  if (!isAdmin) return;
-  if (didSetHomeRef.current) return;
-  didSetHomeRef.current = true;
-  setView(VIEW.LANDING);
-}, [authUser, isAdmin, setView]);
+  useEffect(() => {
+    if (isBooting) return;
+    if (didInitialRouteRef.current) return;
 
-// Avoid a brief flash of the landing page while auth is still loading
-if (authUser === undefined) {
-  return (
-    <div style={styles.shell}>
-      <div style={styles.page}>
-        <div style={styles.card}>
-          <div style={{ fontWeight: 900, marginBottom: 6 }}>Loading…</div>
-          <div style={styles.muted}>Signing you in and loading programme data.</div>
+    // Only decide initial landing once we have BOTH auth + blob state
+    didInitialRouteRef.current = true;
+
+    if (isAdmin) {
+      // Admin always starts on Home
+      setView(VIEW.LANDING);
+      return;
+    }
+
+    // Guests land on their first allowed tracker page
+    const proj = (visibleProjects || [])[0] || null;
+    if (!proj) return;
+
+    setActiveProjectId(proj.id);
+
+    const allowed = (proj.pages || []).filter((pg) => {
+      if (pg.meta?.isMaster) return false;
+      const respId = pg.meta?.responsibilityId;
+      const resp = (proj.responsibilities || []).find((r) => r.id === respId);
+      const supplier = String(resp?.supplier || "").trim();
+      return supplier && hasSupplierAccess(supplier);
+    });
+
+    if (allowed.length) setActivePageId(allowed[0].id);
+    setView(VIEW.PROJECT);
+  }, [isBooting, isAdmin, visibleProjects, hasSupplierAccess]);
+
+  if (isBooting) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#F9FAFB" }}>
+        <div style={styles.loadingTopBar} />
+        <div style={{ padding: 24, maxWidth: 720, margin: "0 auto" }}>
+          <div style={styles.loadingCard}>
+            <div style={styles.loadingTitle}>Loading latest tracker data…</div>
+            <div style={styles.loadingSub}>
+              Fetching the most recent state from Azure Blob.
+            </div>
+            {hydrateError ? (
+              <div style={{ marginTop: 10, fontSize: 12, color: "#B91C1C" }}>{hydrateError}</div>
+            ) : null}
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-/* ---------- VIEW: LANDING ---------- */
-  if (view === VIEW.LANDING && !isGuest) {
+  /* ---------- VIEW: LANDING ---------- */
+  if (view === VIEW.LANDING) {
     return (
       <>
         <div style={styles.shell}>
@@ -1506,9 +1434,6 @@ if (authUser === undefined) {
                 <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
-              <div style={styles.headerButtons}>
-                <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={forceSaveNow} />
-              </div>
             </div>
 
             <div style={styles.card}>
@@ -1516,7 +1441,7 @@ if (authUser === undefined) {
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
         <select
           style={{ ...styles.input, width: 260 }}
-          value={activeProjectId || (visibleProjects?.[0]?.id ?? projects?.[0]?.id ?? "")}
+          value={activeProject?.id || ""}
           onChange={(e) => {
             const pid = e.target.value;
             setActiveProjectId(pid);
@@ -1579,16 +1504,18 @@ if (authUser === undefined) {
 
         {!isGuest && (
           <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
+            open={chatOpen}
+            setOpen={setChatOpen}
+            messages={chatMessages}
+            input={chatInput}
+            setInput={setChatInput}
+            searchBackups={chatSearchBackups}
+            setSearchBackups={setChatSearchBackups}
+            busy={chatBusy}
+            sendChat={sendChat}
+            endRef={chatEndRef}
+            status={chatStatus}
+            onReset={resetChat}
           />
         )}
       </>
@@ -1596,7 +1523,7 @@ if (authUser === undefined) {
   }
 
   /* ---------- VIEW: PROGRAMME SUMMARY (FULL SCREEN) ---------- */
-  if (view === VIEW.GANTT_SUMMARY && !isGuest) {
+  if (view === VIEW.GANTT_SUMMARY) {
     return (
       <>
         <div style={styles.fullscreen}>
@@ -1651,16 +1578,18 @@ if (authUser === undefined) {
 
         {!isGuest && (
           <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
+            open={chatOpen}
+            setOpen={setChatOpen}
+            messages={chatMessages}
+            input={chatInput}
+            setInput={setChatInput}
+            searchBackups={chatSearchBackups}
+            setSearchBackups={setChatSearchBackups}
+            busy={chatBusy}
+            sendChat={sendChat}
+            endRef={chatEndRef}
+            status={chatStatus}
+            onReset={resetChat}
           />
         )}
       </>
@@ -1668,7 +1597,7 @@ if (authUser === undefined) {
   }
 
   /* ---------- VIEW: SUMMARY ---------- */
-  if (view === VIEW.SUMMARY && !isGuest) {
+  if (view === VIEW.SUMMARY) {
     return (
       <>
         <div style={styles.shell}>
@@ -1679,7 +1608,6 @@ if (authUser === undefined) {
                 <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
               </div>
               <div style={styles.headerButtons}>
-                <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
                 <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                   Home
                 </button>
@@ -1799,16 +1727,18 @@ if (authUser === undefined) {
 
         {!isGuest && (
           <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
+            open={chatOpen}
+            setOpen={setChatOpen}
+            messages={chatMessages}
+            input={chatInput}
+            setInput={setChatInput}
+            searchBackups={chatSearchBackups}
+            setSearchBackups={setChatSearchBackups}
+            busy={chatBusy}
+            sendChat={sendChat}
+            endRef={chatEndRef}
+            status={chatStatus}
+            onReset={resetChat}
           />
         )}
       </>
@@ -1823,9 +1753,7 @@ if (authUser === undefined) {
           projects={projects}
           visibleProjects={visibleProjects}
           activeProject={activeProject}
-          activeProjectId={activeProjectId}
           activePage={activePage}
-          activePageId={activePageId}
           authUser={authUser}
           isAdmin={isAdmin}
           isGuest={isGuest}
@@ -1855,23 +1783,23 @@ if (authUser === undefined) {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
-          saveInfo={saveInfo}
-          forceSaveNow={forceSaveNow}
         />
       </div>
 
       {!isGuest && (
         <ChatOverlay
-        open={chatOpen}
-        setOpen={setChatOpen}
-        messages={chatMessages}
-        input={chatInput}
-        setInput={setChatInput}
-        busy={chatBusy}
-        sendChat={sendChat}
-        endRef={chatEndRef}
-        status={chatStatus}
-        onReset={resetChat}
+          open={chatOpen}
+          setOpen={setChatOpen}
+          messages={chatMessages}
+          input={chatInput}
+          setInput={setChatInput}
+          searchBackups={chatSearchBackups}
+          setSearchBackups={setChatSearchBackups}
+          busy={chatBusy}
+          sendChat={sendChat}
+          endRef={chatEndRef}
+          status={chatStatus}
+          onReset={resetChat}
         />
       )}
     </>
@@ -1884,9 +1812,7 @@ function ProjectView(props) {
     projects,
     visibleProjects,
     activeProject,
-    activeProjectId,
     activePage,
-    activePageId,
     authUser,
     isAdmin,
     isGuest,
@@ -1915,8 +1841,6 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
-    saveInfo,
-    forceSaveNow,
   } = props;
 
   // Pages a guest is allowed to see inside the active project
@@ -2048,13 +1972,15 @@ function tickMilestone(row, field, checked) {
   });
 }
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
+  const projectOptions = isAdmin ? projects : visibleProjects?.length ? visibleProjects : projects;
+
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
       <div style={styles.selectorBlock}>
         <div style={styles.sectionTitle}>Project</div>
         <select
           style={{ ...styles.input, width: 260 }}
-          value={activeProjectId || (visibleProjects?.[0]?.id ?? projects?.[0]?.id ?? "")}
+          value={activeProjectId || projectOptions?.[0]?.id || ""}
           onChange={(e) => {
             const pid = e.target.value;
             setActiveProjectId(pid);
@@ -2076,7 +2002,7 @@ function tickMilestone(row, field, checked) {
             }
           }}
         >
-          {(visibleProjects || projects).map((p) => (
+          {(projectOptions || []).map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
             </option>
@@ -2088,7 +2014,7 @@ function tickMilestone(row, field, checked) {
         <div style={styles.sectionTitle}>Pages</div>
         <select
           style={{ ...styles.input, width: 280 }}
-          value={activePageId || (allowedPages?.[0]?.id ?? "")}
+          value={activePageId || allowedPages?.[0]?.id || ""}
           onChange={(e) => setActivePageId(e.target.value)}
           disabled={!activeProject}
         >
@@ -2111,7 +2037,6 @@ function tickMilestone(row, field, checked) {
           <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
         </div>
         <div style={styles.headerButtons}>
-          <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={forceSaveNow} />
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
@@ -2883,4 +2808,23 @@ const styles = {
   projectHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 },
   projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
   projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
+
+  /* --- Boot loading --- */
+  loadingTopBar: {
+    height: 3,
+    width: "100%",
+    background:
+      "linear-gradient(90deg, rgba(16,185,129,0) 0%, rgba(16,185,129,1) 50%, rgba(16,185,129,0) 100%)",
+    backgroundSize: "200% 100%",
+    animation: "azzureLoading 1.1s linear infinite",
+  },
+  loadingCard: {
+    border: "1px solid #E5E7EB",
+    borderRadius: 16,
+    background: "#fff",
+    padding: 16,
+    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+  },
+  loadingTitle: { fontWeight: 900, fontSize: 16, color: "#111827" },
+  loadingSub: { marginTop: 6, fontSize: 13, color: "#6B7280" },
 };

@@ -266,13 +266,15 @@ const styles = {
     color: "#111827",
     userSelect: "none",
     whiteSpace: "nowrap",
+    cursor: "pointer",
   },
   checkbox: {
     width: 14,
     height: 14,
+    cursor: "pointer",
   },
   checkboxLabel: {
-    fontWeight: 900,
+    fontWeight: 800,
   },
 
   textarea: {
