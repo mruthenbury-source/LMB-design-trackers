@@ -1772,43 +1772,55 @@ function ProjectView(props) {
     if (first && first.id !== activePage.id) setActivePageId(first.id);
   }, [activeProject, activePage, allowedPages, isGuest, authUser, setActivePageId]);
 
-  // ---------------- Locks: guest confirm -> lock, admin unlock ----------------
-  function lockInfo() {
-    return {
-      lockedBy: authUser?.userDetails || authUser?.userId || "guest",
-      lockedAt: new Date().toISOString(),
-    };
-  }
+ // ---------------- Locks: guest confirm -> lock, admin unlock ----------------
+function lockInfo() {
+  return {
+    lockedBy: authUser?.userDetails || authUser?.userId || "guest",
+    lockedAt: new Date().toISOString(),
+  };
+}
 
-  function adminUnlock(rowId, field) {
-    const row = (activePage?.rows || []).find((x) => x.id === rowId);
-    const nextLocks = { ...(row?.locks || {}), [field]: null };
-    updateRow(rowId, { locks: nextLocks });
-  }
+function adminUnlock(rowId, field) {
+  const row = activePage?.rows?.find((x) => x.id === rowId);
+  const nextLocks = { ...(row?.locks || {}), [field]: null };
+  updateRow(rowId, { locks: nextLocks });
+}
 
-  function tickMilestone(row, field, checked) {
-    if (!row) return;
-    const locked = !!row?.locks?.[field];
-    if (locked && !isAdmin) return;
+function tickMilestone(row, field, checked) {
+  if (!row) return;
 
-    if (isGuest) {
-      if (!checked) return; // guests cannot untick
-      if (locked) return;
-      const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
-      if (!ok) return;
-      updateRow(row.id, {
-        [field]: true,
-        locks: { ...(row.locks || {}), [field]: lockInfo() },
-      });
-      return;
-    }
+  const locked = !!row?.locks?.[field];
 
-    // admin toggle; unlocking is explicit via the unlock button
+  // Guests: can only tick ONCE if not locked; cannot untick
+  if (isGuest) {
+    if (!checked) return;          // guests cannot untick
+    if (locked) return;            // locked = can't change
+
+    const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
+    if (!ok) return;
+
     updateRow(row.id, {
-      [field]: checked,
+      [field]: true,
+      locks: { ...(row.locks || {}), [field]: lockInfo() },
     });
+    return;
   }
 
+  // Admin: can tick/untick. Unticking clears the lock so guests can tick again.
+  if (!checked) {
+    updateRow(row.id, {
+      [field]: false,
+      locks: { ...(row.locks || {}), [field]: null }, // ✅ clears padlock
+    });
+    return;
+  }
+
+  // Admin ticking ON: keep existing lock meta if any; otherwise leave unlocked
+  updateRow(row.id, {
+    [field]: true,
+    locks: { ...(row.locks || {}), [field]: row.locks?.[field] || null },
+  });
+}
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
