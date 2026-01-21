@@ -715,20 +715,16 @@ export default function App() {
     summarySupplier,
   ]);
   
-  /* ---- derived active project/page ---- */
-  const activeProject = useMemo(
-    () => projects.find((p) => p.id === (activeProjectId || projects[0]?.id)) || projects[0] || null,
-    [projects, activeProjectId]
-  );
+/* ---- derived active project/page (ONLY ONCE) ---- */
+const activeProject = useMemo(() => {
+  if (!projects?.length) return null;
+  return projects.find((p) => p.id === activeProjectId) || projects[0] || null;
+}, [projects, activeProjectId]);
 
-  const activePage = useMemo(() => {
-    if (!activeProject) return null;
-    return (
-      activeProject.pages.find((pg) => pg.id === (activePageId || activeProject.pages[0]?.id)) ||
-      activeProject.pages[0] ||
-      null
-    );
-  }, [activeProject, activePageId]);
+const activePage = useMemo(() => {
+  if (!activeProject?.pages?.length) return null;
+  return activeProject.pages.find((pg) => pg.id === activePageId) || activeProject.pages[0] || null;
+}, [activeProject, activePageId]);
 
   // ---------------- Permissions: guests only see supplier pages ----------------
   const allowedPages = useMemo(() => {
@@ -813,42 +809,47 @@ export default function App() {
       })
     );
   }
-  // ---------------- Locks: guest confirm -> lock, admin unlock ----------------
-  function lockInfo() {
-    return {
-      lockedBy: authUser?.userDetails || authUser?.userId || 'guest',
-      lockedAt: new Date().toISOString(),
-    };
-  }
+// ---------------- Locks: guest confirm -> lock, admin unlock ----------------
+function lockInfo() {
+  return {
+    lockedBy: authUser?.userDetails || authUser?.userId || "guest",
+    lockedAt: new Date().toISOString(),
+  };
+}
 
-  function adminUnlock(rowId, field) {
-    const clear = { ...(activePage?.rows?.find((x) => x.id === rowId)?.locks || {}), [field]: null };
-    updateRow(rowId, { locks: clear });
-  }
+function adminUnlock(rowId, field) {
+  const row = activePage?.rows?.find((x) => x.id === rowId);
+  const nextLocks = { ...(row?.locks || {}) };
+  delete nextLocks[field];
+  updateRow(rowId, { locks: nextLocks });
+}
 
-  function tickMilestone(row, field, checked) {
-    if (!row) return;
-    const locked = !!row?.locks?.[field];
-    if (locked && !isAdmin) return;
+function tickMilestone(row, field, checked) {
+  if (!row) return;
 
-    if (isGuest) {
-      if (!checked) return; // guests cannot untick
-      if (locked) return;
-      const ok = window.confirm('Once ticked this will be locked and only administrator can unlock');
-      if (!ok) return;
-      updateRow(row.id, {
-        [field]: true,
-        locks: { ...(row.locks || {}), [field]: lockInfo() },
-      });
-      return;
-    }
+  const locked = !!row?.locks?.[field];
 
-    // admin normal toggle (no lock unless already locked)
+  // guests: cannot change locked, cannot untick
+  if (isGuest) {
+    if (!checked) return;
+    if (locked) return;
+
+    const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
+    if (!ok) return;
+
     updateRow(row.id, {
-      [field]: checked,
-      locks: { ...(row.locks || {}), [field]: checked ? (row?.locks?.[field] || null) : null },
+      [field]: true,
+      locks: { ...(row.locks || {}), [field]: lockInfo() },
     });
+    return;
   }
+
+  // admin: normal toggle
+  updateRow(row.id, {
+    [field]: checked,
+    locks: checked ? { ...(row.locks || {}) } : { ...(row.locks || {}), [field]: null },
+  });
+}
 
 
   /* ---- master edits ---- */
@@ -1138,7 +1139,7 @@ export default function App() {
 
   function exportSummaryPDF() {
     openPrintWindow({
-      title: `LMB Design Programme and Trackers — Summary (${summaryFilter.toUpperCase()})`,
+      title: `Centalium Strategic Supply and Delivery Platform — Summary (${summaryFilter.toUpperCase()})`,
       subtitle: `Generated: ${isoToday()} • Traffic based on Status A date`,
       tableHead: ["Status", "Traffic", "Project", "Responsibility", "Supplier", "Item", "Req. on Site", "Status A", "First Issue"],
       tableRows: filteredSummary.map((r) => [
@@ -1307,7 +1308,7 @@ export default function App() {
           <div style={styles.page}>
             <div style={styles.header}>
               <div>
-                <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
+                <h1 style={styles.h1}>Centralium</h1>
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
             </div>
