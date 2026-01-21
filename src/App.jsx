@@ -1905,37 +1905,38 @@ function ProjectView(props) {
         </div>
       </div>
 
-      {/* Defaults (hidden on Project Home) */}
-      {!isMasterPage ? (
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <h2 style={styles.h2}>Default timeframes</h2>
-            <span style={styles.muted}>(days between stages – can be overridden per row)</span>
-          </div>
-          <div style={styles.grid2}>
-            <label style={styles.label}>
-              Days: Req → Status A
-              <input
-                style={styles.input}
-                type="number"
-                min={0}
-                value={globalDaysReqToStatusA}
-                onChange={(e) => setGlobalDaysReqToStatusA(clampInt(e.target.value, 0))}
-              />
-            </label>
-            <label style={styles.label}>
-              Days: Status A → First
-              <input
-                style={styles.input}
-                type="number"
-                min={0}
-                value={globalDaysStatusAToFirstIssue}
-                onChange={(e) => setGlobalDaysStatusAToFirstIssue(clampInt(e.target.value, 0))}
-              />
-            </label>
-          </div>
-        </div>
-      ) : null}
+     {/* Defaults (hidden on Project Home + hidden for guests) */}
+{!isMasterPage && !isGuest ? (
+  <div style={styles.card}>
+    <div style={styles.cardHeader}>
+      <h2 style={styles.h2}>Default timeframes</h2>
+      <span style={styles.muted}>(days between stages – can be overridden per row)</span>
+    </div>
+    <div style={styles.grid2}>
+      <label style={styles.label}>
+        Days: Req → Status A
+        <input
+          style={styles.input}
+          type="number"
+          min={0}
+          value={globalDaysReqToStatusA}
+          onChange={(e) => setGlobalDaysReqToStatusA(clampInt(e.target.value, 0))}
+        />
+      </label>
+      <label style={styles.label}>
+        Days: Status A → First
+        <input
+          style={styles.input}
+          type="number"
+          min={0}
+          value={globalDaysStatusAToFirstIssue}
+          onChange={(e) => setGlobalDaysStatusAToFirstIssue(clampInt(e.target.value, 0))}
+        />
+      </label>
+    </div>
+  </div>
+) : null}
+
 
       {/* Project Home */}
       {isMasterPage ? (
