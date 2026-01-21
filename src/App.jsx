@@ -1507,7 +1507,7 @@ if (authUser === undefined) {
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
               <div style={styles.headerButtons}>
-                <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={onSaveNow} />
+                <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={forceSaveNow} />
               </div>
             </div>
 
@@ -1856,7 +1856,7 @@ if (authUser === undefined) {
           setView={setView}
           VIEW={VIEW}
           saveInfo={saveInfo}
-          onSaveNow={forceSaveNow}
+          forceSaveNow={forceSaveNow}
         />
       </div>
 
@@ -1916,7 +1916,7 @@ function ProjectView(props) {
     setView,
     VIEW,
     saveInfo,
-    onSaveNow,
+    forceSaveNow,
   } = props;
 
   // Pages a guest is allowed to see inside the active project
@@ -2111,7 +2111,7 @@ function tickMilestone(row, field, checked) {
           <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
         </div>
         <div style={styles.headerButtons}>
-          <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={onSaveNow} />
+          <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={forceSaveNow} />
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
