@@ -6,6 +6,8 @@ export default function ChatOverlay({
   messages,
   input,
   setInput,
+  searchBackups,
+  setSearchBackups,
   busy,
   sendChat,
   endRef,
@@ -110,6 +112,16 @@ export default function ChatOverlay({
 
         {/* Input */}
         <div style={styles.footer}>
+          <label style={styles.checkboxRow} title="Include historic weekly backups in search results">
+            <input
+              type="checkbox"
+              checked={!!searchBackups}
+              onChange={(e) => setSearchBackups?.(e.target.checked)}
+              style={styles.checkbox}
+            />
+            <span style={styles.checkboxLabel}>Search backups</span>
+          </label>
+
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -240,6 +252,27 @@ const styles = {
     gap: 10,
     alignItems: "flex-end",
     background: "rgba(249,250,251,0.9)",
+  },
+
+  checkboxRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 8px",
+    border: "1px solid #E5E7EB",
+    borderRadius: 12,
+    background: "rgba(255,255,255,0.9)",
+    fontSize: 12,
+    color: "#111827",
+    userSelect: "none",
+    whiteSpace: "nowrap",
+  },
+  checkbox: {
+    width: 14,
+    height: 14,
+  },
+  checkboxLabel: {
+    fontWeight: 700,
   },
 
   textarea: {
