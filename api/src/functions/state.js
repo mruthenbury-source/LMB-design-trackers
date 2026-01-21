@@ -14,22 +14,6 @@ function getClients() {
 
   return { container, blockBlob };
 }
-function getClientPrincipal(req) {
-  const header = req.headers.get("x-ms-client-principal");
-  if (!header) return null;
-  try {
-    const decoded = Buffer.from(header, "base64").toString("utf8");
-    return JSON.parse(decoded);
-  } catch {
-    return null;
-  }
-}
-
-function hasRole(principal, role) {
-  const roles = principal?.userRoles || [];
-  return roles.includes(role);
-}
-
 
 async function streamToString(readable) {
   return await new Promise((resolve, reject) => {
@@ -57,18 +41,6 @@ app.http("state", {
         const state = text ? JSON.parse(text) : null;
 
         return { status: 200, jsonBody: { ok: true, state } };
-      }
-      // POST: restrict writes
-      if (req.method === "POST") {
-        const principal = getClientPrincipal(req);
-
-        // must be logged in AND be admin
-        if (!principal) {
-          return { status: 401, jsonBody: { ok: false, error: "Login required to save" } };
-        }
-        if (!hasRole(principal, "admin")) {
-          return { status: 403, jsonBody: { ok: false, error: "Admin role required to save" } };
-        }
       }
 
       // POST
