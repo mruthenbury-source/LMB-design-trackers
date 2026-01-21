@@ -1790,8 +1790,6 @@ function adminUnlock(rowId, field) {
     if (!row) return;
     const locked = !!row?.locks?.[field];
     if (locked && !isAdmin) return;
-function tickMilestone(row, field, checked) {
-  if (!row) return;
 
   const locked = !!row?.locks?.[field];
 
@@ -1838,11 +1836,7 @@ function tickMilestone(row, field, checked) {
       return;
     }
 
-    // admin toggle; unlocking is explicit via the unlock button
-    updateRow(row.id, {
-      [field]: checked,
-    });
-  }
+  
 
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
