@@ -1752,6 +1752,8 @@ export default function App() {
         <ProjectView
           projects={projects}
           visibleProjects={visibleProjects}
+          activeProjectId={activeProjectId}
+          activePageId={activePageId}
           activeProject={activeProject}
           activePage={activePage}
           authUser={authUser}
@@ -1811,6 +1813,8 @@ function ProjectView(props) {
   const {
     projects,
     visibleProjects,
+    activeProjectId,
+    activePageId,
     activeProject,
     activePage,
     authUser,
