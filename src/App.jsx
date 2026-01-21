@@ -469,6 +469,55 @@ export default function App() {
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
 
+  /* ---------------- BLOB SAVE INDICATOR ---------------- */
+  const [saveInfo, setSaveInfo] = useState({ status: "idle", lastSavedAt: null, error: null });
+  const saveTimerRef = useRef(null);
+  const lastSavedJsonRef = useRef(null);
+
+  const formatTime = (d) => {
+    try {
+      if (!d) return "";
+      const dt = typeof d === "string" ? new Date(d) : d;
+      if (!(dt instanceof Date) || Number.isNaN(dt.getTime())) return "";
+      return dt.toLocaleString();
+    } catch {
+      return "";
+    }
+  };
+
+  function SaveStatusButton({ status, lastSavedAt, error, onClick }) {
+    const s = String(status || "idle");
+    const label =
+      s === "saved" ? `Saved${lastSavedAt ? ` · ${formatTime(lastSavedAt)}` : ""}` : s === "saving" ? "Saving…" : s === "error" ? "Save failed" : "Not saved";
+
+    const bg = s === "saved" ? "#10B981" : s === "saving" ? "#F59E0B" : s === "error" ? "#EF4444" : "#9CA3AF";
+
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={s === "error" ? String(error || "Save failed") : "Syncs to Azure Blob automatically"}
+        style={{
+          position: "fixed",
+          top: 14,
+          right: 14,
+          zIndex: 9999,
+          border: "none",
+          borderRadius: 999,
+          padding: "8px 12px",
+          fontWeight: 900,
+          fontSize: 12,
+          color: "white",
+          background: bg,
+          boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
+          cursor: "pointer",
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
+
   /* ---------------- AUTH + PERMISSIONS (Azure Static Web Apps) ---------------- */
   const [authUser, setAuthUser] = useState(undefined); // undefined=loading, null=anonymous, object=logged in
 
@@ -499,8 +548,6 @@ export default function App() {
   }, [authUser]);
 
   const isAdmin = useMemo(() => {
-    // Treat anonymous as admin so the site still works without login
-    if (authUser === null) return true;
     if (!authUser) return false;
     const roles = authRoles.map((r) => String(r || "").toLowerCase());
     return roles.includes("administrator") || roles.includes("admin");
@@ -534,36 +581,6 @@ export default function App() {
     );
   }, [projects, isAdmin, hasSupplierAccess]);
 
-  // If a supplier (guest) lands on the app, take them straight to their first available tracker.
-  // This avoids the confusing "landing" page for supplier-only users.
-  useEffect(() => {
-    if (!isGuest) return;
-    if (!authUser) return; // still loading / anonymous
-    if (!visibleProjects?.length) return;
-
-    const proj = visibleProjects[0];
-    const allowedPages = (proj.pages || []).filter((pg) => {
-      if (pg.meta?.isMaster) return false;
-      const respId = pg.meta?.responsibilityId;
-      const resp = (proj.responsibilities || []).find((r) => r.id === respId);
-      const supplier = String(resp?.supplier || "").trim();
-      return supplier && hasSupplierAccess(supplier);
-    });
-    const pageId = allowedPages[0]?.id || null;
-
-    setActiveProjectId((prev) => {
-      if (prev && visibleProjects.some((p) => p.id === prev)) return prev;
-      return proj.id;
-    });
-    if (pageId) {
-      setActivePageId((prev) => {
-        if (prev && allowedPages.some((pg) => pg.id === prev)) return prev;
-        return pageId;
-      });
-    }
-    setView((v) => (v === VIEW.LANDING ? VIEW.PROJECT : v));
-  }, [isGuest, authUser, visibleProjects, hasSupplierAccess]);
-
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
   const [summaryProjectId, setSummaryProjectId] = useState("all");
@@ -584,7 +601,6 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatStatus, setChatStatus] = useState("idle"); // "idle" | "checking" | "ok" | "error"
-  const [chatSearchBackups, setChatSearchBackups] = useState(false);
   const chatEndRef = useRef(null);
   const CHAT_WELCOME = {
     role: "assistant",
@@ -597,7 +613,6 @@ export default function App() {
     setChatInput("");
     setChatBusy(false);
     setChatStatus("idle");
-    setChatSearchBackups(false);
   }
 
 
@@ -613,160 +628,171 @@ export default function App() {
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
 
- /* ---- load ---- */
-useEffect(() => {
-  let cancelled = false;
+  /* ---- load ---- */
+  useEffect(() => {
+    let cancelled = false;
 
-  async function hydrateFromPayload(parsed) {
-    if (!parsed) return;
+    async function hydrateFromPayload(parsed) {
+      if (!parsed) return;
 
-    if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
-    if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
+      if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
+      if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
 
-    if (Array.isArray(parsed.projects) && parsed.projects.length) {
-      const hydrated = parsed.projects.map((proj) => {
-        const master =
-          Array.isArray(proj.master) && proj.master.length
-            ? proj.master.map((m) => ({
-                id: m.id || uid(),
-                blockZone: m.blockZone || "",
-                levels:
-                  Array.isArray(m.levels) && m.levels.length
-                    ? m.levels.map((lv, idx) => ({
-                        id: lv.id || uid(),
-                        name: lv.name || `Level ${idx + 1}`,
-                        startDate: lv.startDate || "",
-                        finishDate: lv.finishDate || "",
-                      }))
-                    : [defaultLevel("Level 1")],
-              }))
-            : [defaultMasterRow()];
+      if (Array.isArray(parsed.projects) && parsed.projects.length) {
+        const hydrated = parsed.projects.map((proj) => {
+          const master =
+            Array.isArray(proj.master) && proj.master.length
+              ? proj.master.map((m) => ({
+                  id: m.id || uid(),
+                  blockZone: m.blockZone || "",
+                  levels:
+                    Array.isArray(m.levels) && m.levels.length
+                      ? m.levels.map((lv, idx) => ({
+                          id: lv.id || uid(),
+                          name: lv.name || `Level ${idx + 1}`,
+                          startDate: lv.startDate || "",
+                          finishDate: lv.finishDate || "",
+                        }))
+                      : [defaultLevel("Level 1")],
+                }))
+              : [defaultMasterRow()];
+  
+          const responsibilities =
+            Array.isArray(proj.responsibilities) && proj.responsibilities.length
+              ? proj.responsibilities.map((r) => ({
+                  id: r.id || uid(),
+                  name: r.name || "",
+                  supplier: r.supplier || "",
+                }))
+              : [defaultResponsibility()];
+  
+          const pages =
+            Array.isArray(proj.pages) && proj.pages.length
+              ? proj.pages.map((pg) => {
+                  const rawName = pg.name || "Untitled Page";
+                  const migratedName = pg.meta?.isMaster && rawName === "Master" ? "Project Home" : rawName;
+  
+                  return {
+                    id: pg.id || uid(),
+                    name: migratedName,
+                    rows: Array.isArray(pg.rows)
+                      ? pg.rows.map((r) => ({
+                          ...defaultRow(r.kind || "item"),
+                          ...r,
+                          id: r.id || uid(),
+                          kind: r.kind || "item",
+                          completed: !!r.completed,
+                          notRequired: !!r.notRequired,
+                          statusADone: !!r.statusADone,
+                          firstIssueDone: !!r.firstIssueDone,
+                          locks: {
+                            statusADone: r?.locks?.statusADone || null,
+                            firstIssueDone: r?.locks?.firstIssueDone || null,
+                          },
+                          comments: Array.isArray(r?.comments) ? r.comments : [],
+                          meta: {
+                            generated: !!r?.meta?.generated,
+                            blockZone: r?.meta?.blockZone || "",
+                            levelId: r?.meta?.levelId ?? null,
+                            levelName: r?.meta?.levelName || "",
+                            finishDate: r?.meta?.finishDate || "",
+                          },
+                        }))
+                      : [],
+                    meta: {
+                      generated: !!pg?.meta?.generated,
+                      responsibilityId: pg?.meta?.responsibilityId ?? null,
+                      isMaster: !!pg?.meta?.isMaster,
+                    },
+                  };
+                })
+              : [];
+  
+          if (!pages.some((p) => p.meta?.isMaster)) {
+            pages.unshift({
+              id: uid(),
+              name: "Project Home",
+              rows: [],
+              meta: { generated: false, responsibilityId: null, isMaster: true },
+            });
+          }
+  
+          return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
+        });
 
-        const responsibilities =
-          Array.isArray(proj.responsibilities) && proj.responsibilities.length
-            ? proj.responsibilities.map((r) => ({
-                id: r.id || uid(),
-                name: r.name || "",
-                supplier: r.supplier || "",
-              }))
-            : [defaultResponsibility()];
+        setProjects(hydrated);
 
-        const pages =
-          Array.isArray(proj.pages) && proj.pages.length
-            ? proj.pages.map((pg) => {
-                const rawName = pg.name || "Untitled Page";
-                const migratedName = pg.meta?.isMaster && rawName === "Master" ? "Project Home" : rawName;
+        const pid = parsed.activeProjectId || hydrated[0].id;
+        setActiveProjectId(pid);
 
-                return {
-                  id: pg.id || uid(),
-                  name: migratedName,
-                  rows: Array.isArray(pg.rows)
-                    ? pg.rows.map((r) => ({
-                        ...defaultRow(r.kind || "item"),
-                        ...r,
-                        id: r.id || uid(),
-                        kind: r.kind || "item",
-                        completed: !!r.completed,
-                        notRequired: !!r.notRequired,
-                        statusADone: !!r.statusADone,
-                        firstIssueDone: !!r.firstIssueDone,
-                        locks: {
-                          statusADone: r?.locks?.statusADone || null,
-                          firstIssueDone: r?.locks?.firstIssueDone || null,
-                        },
-                        comments: Array.isArray(r?.comments) ? r.comments : [],
-                        meta: {
-                          generated: !!r?.meta?.generated,
-                          blockZone: r?.meta?.blockZone || "",
-                          levelId: r?.meta?.levelId ?? null,
-                          levelName: r?.meta?.levelName || "",
-                          finishDate: r?.meta?.finishDate || "",
-                        },
-                      }))
-                    : [],
-                  meta: {
-                    generated: !!pg?.meta?.generated,
-                    responsibilityId: pg?.meta?.responsibilityId ?? null,
-                    isMaster: !!pg?.meta?.isMaster,
-                  },
-                };
-              })
-            : [];
-
-        if (!pages.some((p) => p.meta?.isMaster)) {
-          pages.unshift({
-            id: uid(),
-            name: "Project Home",
-            rows: [],
-            meta: { generated: false, responsibilityId: null, isMaster: true },
-          });
-        }
-
-        return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
-      });
-
-      setProjects(hydrated);
-
-      const pid = parsed.activeProjectId || hydrated[0].id;
-      setActiveProjectId(pid);
-
-      const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
-      const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
-      setActivePageId(parsed.activePageId || masterPg.id);
-    }
-
-    if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
-    if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
-    if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
-    if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
-  }
-
-  async function load() {
-    try {
-      // 1) Try server (Azure Blob via /api/state)
-      const res = await fetch("/api/state", { method: "GET" });
-      if (res.ok) {
-        const data = await res.json();
-        const serverState = data?.state ?? null;
-
-        if (!cancelled && serverState) {
-          await hydrateFromPayload(serverState);
-
-          // Optional: mirror to localStorage for offline/fallback
-          try {
-            localStorage.setItem(LS_KEY, JSON.stringify(serverState));
-          } catch {}
-          return;
-        }
+        const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
+        const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
+        setActivePageId(parsed.activePageId || masterPg.id);
       }
-    } catch {
-      // ignore, fallback to localStorage
+
+      if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
+      if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
+      if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
+      if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
     }
 
-    // 2) Fallback: localStorage (existing behaviour)
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (!cancelled) await hydrateFromPayload(parsed);
-    } catch {
-      // ignore
-    }
-  }
+    (async () => {
+      try {
+        // 1) Prefer Azure Blob state (via API)
+        try {
+          const r = await fetch("/api/state", { method: "GET", cache: "no-store" });
+          if (r.ok) {
+            const data = await r.json().catch(() => ({}));
+            const serverState = data?.state ?? null;
+            if (!cancelled && serverState) {
+              await hydrateFromPayload(serverState);
+              // Store as the "saved" baseline to avoid immediate re-post.
+              try {
+                lastSavedJsonRef.current = JSON.stringify(serverState ?? null);
+                setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
+              } catch {
+                // ignore
+              }
 
-  (async () => {
-    try {
-      await load();
-    } finally {
-      if (!cancelled) didHydrateRef.current = true;
-    }
-  })();
+              // Optional local fallback
+              try {
+                localStorage.setItem(LS_KEY, JSON.stringify(serverState));
+              } catch {
+                // ignore
+              }
+              return;
+            }
+          }
+        } catch {
+          // ignore and fallback
+        }
 
-  return () => {
-    cancelled = true;
-  };
-}, []);
+        // 2) Fallback: localStorage
+        try {
+          const raw = localStorage.getItem(LS_KEY);
+          if (!raw) return;
+          const parsed = JSON.parse(raw);
+          if (!cancelled) {
+            await hydrateFromPayload(parsed);
+            try {
+              lastSavedJsonRef.current = JSON.stringify(parsed ?? null);
+              setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
+            } catch {
+              // ignore
+            }
+          }
+        } catch {
+          // ignore
+        }
+      } finally {
+        if (!cancelled) didHydrateRef.current = true;
+      }
+    })();
 
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   
 
   /* ---- persist ---- */
@@ -790,6 +816,88 @@ useEffect(() => {
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
     } catch {
       // ignore
+    }
+
+    // ✅ Auto-save to Azure Blob (debounced)
+    let json = "";
+    try {
+      json = JSON.stringify(payload ?? null);
+    } catch {
+      json = "";
+    }
+
+    if (json && json === lastSavedJsonRef.current) {
+      // already in sync
+      if (saveInfo.status !== "saved") setSaveInfo((s) => ({ ...s, status: "saved", error: null }));
+      return;
+    }
+
+    setSaveInfo((s) => ({ ...s, status: "saving", error: null }));
+
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        const r = await fetch("/api/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: payload }),
+        });
+
+        if (!r.ok) {
+          setSaveInfo((s) => ({ status: "error", lastSavedAt: s.lastSavedAt, error: `POST /api/state failed (${r.status})` }));
+          return;
+        }
+
+        lastSavedJsonRef.current = json;
+        setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
+      } catch (e) {
+        setSaveInfo((s) => ({ status: "error", lastSavedAt: s.lastSavedAt, error: String(e?.message || e) }));
+      }
+    }, 800);
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [
+    globalDaysReqToStatusA,
+    globalDaysStatusAToFirstIssue,
+    projects,
+    activeProjectId,
+    activePageId,
+    view,
+    summaryFilter,
+    summaryProjectId,
+    summarySupplier,
+  ]);
+
+  const forceSaveNow = useCallback(async () => {
+    const payload = {
+      globalDaysReqToStatusA,
+      globalDaysStatusAToFirstIssue,
+      projects,
+      activeProjectId,
+      activePageId,
+      view,
+      summaryFilter,
+      summaryProjectId,
+      summarySupplier,
+    };
+    setSaveInfo((s) => ({ ...s, status: "saving", error: null }));
+    try {
+      const r = await fetch("/api/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: payload }),
+      });
+      if (!r.ok) {
+        setSaveInfo((s) => ({ ...s, status: "error", error: `POST /api/state failed (${r.status})` }));
+        return;
+      }
+      const json = JSON.stringify(payload ?? null);
+      lastSavedJsonRef.current = json;
+      setSaveInfo({ status: "saved", lastSavedAt: new Date().toISOString(), error: null });
+    } catch (e) {
+      setSaveInfo((s) => ({ ...s, status: "error", error: String(e?.message || e) }));
     }
   }, [
     globalDaysReqToStatusA,
@@ -1286,12 +1394,6 @@ useEffect(() => {
 
     return {
       today: isoToday(),
-      user: {
-        role: isGuest ? "guest" : "admin",
-        isGuest,
-        isAdmin,
-        roles: authRoles,
-      },
       view,
       activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
       activePage: activePage ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster } : null,
@@ -1323,7 +1425,7 @@ useEffect(() => {
       },
       bySupplier,
     };
-  }, [summaryItems, view, activeProject, activePage, projects, isGuest, isAdmin, authRoles]);
+  }, [summaryItems, view, activeProject, activePage, projects]);
 
   async function sendChat() {
     const text = chatInput.trim();
@@ -1339,7 +1441,7 @@ useEffect(() => {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, context: chatContext, searchBackups: !!chatSearchBackups }),
+        body: JSON.stringify({ messages: next, context: chatContext }),
       });
 
       if (!res.ok) {
@@ -1367,6 +1469,7 @@ useEffect(() => {
   if (view === VIEW.LANDING) {
     return (
       <>
+        <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
@@ -1442,22 +1545,18 @@ useEffect(() => {
           </div>
         </div>
 
-        {!isGuest ? (
-          <ChatOverlay
-            open={chatOpen}
-            setOpen={setChatOpen}
-            messages={chatMessages}
-            input={chatInput}
-            setInput={setChatInput}
-            searchBackups={chatSearchBackups}
-            setSearchBackups={setChatSearchBackups}
-            busy={chatBusy}
-            sendChat={sendChat}
-            endRef={chatEndRef}
-            status={chatStatus}
-            onReset={resetChat}
-          />
-        ) : null}
+        <ChatOverlay
+          open={chatOpen}
+          setOpen={setChatOpen}
+          messages={chatMessages}
+          input={chatInput}
+          setInput={setChatInput}
+          busy={chatBusy}
+          sendChat={sendChat}
+          endRef={chatEndRef}
+          status={chatStatus}
+          onReset={resetChat}
+        />
       </>
     );
   }
@@ -1466,6 +1565,7 @@ useEffect(() => {
   if (view === VIEW.GANTT_SUMMARY) {
     return (
       <>
+        <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
         <div style={styles.fullscreen}>
           <div style={styles.fullTopBar}>
             <div>
@@ -1516,22 +1616,18 @@ useEffect(() => {
           </div>
         </div>
 
-        {!isGuest ? (
-          <ChatOverlay
-            open={chatOpen}
-            setOpen={setChatOpen}
-            messages={chatMessages}
-            input={chatInput}
-            setInput={setChatInput}
-            searchBackups={chatSearchBackups}
-            setSearchBackups={setChatSearchBackups}
-            busy={chatBusy}
-            sendChat={sendChat}
-            endRef={chatEndRef}
-            status={chatStatus}
-            onReset={resetChat}
-          />
-        ) : null}
+        <ChatOverlay
+          open={chatOpen}
+          setOpen={setChatOpen}
+          messages={chatMessages}
+          input={chatInput}
+          setInput={setChatInput}
+          busy={chatBusy}
+          sendChat={sendChat}
+          endRef={chatEndRef}
+          status={chatStatus}
+          onReset={resetChat}
+        />
       </>
     );
   }
@@ -1540,6 +1636,7 @@ useEffect(() => {
   if (view === VIEW.SUMMARY) {
     return (
       <>
+        <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
@@ -1665,22 +1762,18 @@ useEffect(() => {
           </div>
         </div>
 
-        {!isGuest ? (
-          <ChatOverlay
-            open={chatOpen}
-            setOpen={setChatOpen}
-            messages={chatMessages}
-            input={chatInput}
-            setInput={setChatInput}
-            searchBackups={chatSearchBackups}
-            setSearchBackups={setChatSearchBackups}
-            busy={chatBusy}
-            sendChat={sendChat}
-            endRef={chatEndRef}
-            status={chatStatus}
-            onReset={resetChat}
-          />
-        ) : null}
+        <ChatOverlay
+          open={chatOpen}
+          setOpen={setChatOpen}
+          messages={chatMessages}
+          input={chatInput}
+          setInput={setChatInput}
+          busy={chatBusy}
+          sendChat={sendChat}
+          endRef={chatEndRef}
+          status={chatStatus}
+          onReset={resetChat}
+        />
       </>
     );
   }
@@ -1688,6 +1781,7 @@ useEffect(() => {
   /* ---------- VIEW: PROJECT ---------- */
   return (
     <>
+      <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
       <div style={styles.shell}>
         <ProjectView
           projects={projects}
@@ -1726,22 +1820,18 @@ useEffect(() => {
         />
       </div>
 
-      {!isGuest ? (
-        <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          searchBackups={chatSearchBackups}
-          setSearchBackups={setChatSearchBackups}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
-        />
-      ) : null}
+      <ChatOverlay
+        open={chatOpen}
+        setOpen={setChatOpen}
+        messages={chatMessages}
+        input={chatInput}
+        setInput={setChatInput}
+        busy={chatBusy}
+        sendChat={sendChat}
+        endRef={chatEndRef}
+        status={chatStatus}
+        onReset={resetChat}
+      />
     </>
   );
 }
