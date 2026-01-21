@@ -2,7 +2,7 @@
   "routes": [
     {
       "route": "/api/state",
-      "allowedRoles": ["anonymous", "authenticated"]
+      "allowedRoles": ["admin"]
     },
     {
       "route": "/api/unlock",
