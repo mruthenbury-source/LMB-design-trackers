@@ -1780,17 +1780,52 @@ function ProjectView(props) {
     };
   }
 
-  function adminUnlock(rowId, field) {
-    const row = (activePage?.rows || []).find((x) => x.id === rowId);
-    const nextLocks = { ...(row?.locks || {}), [field]: null };
-    updateRow(rowId, { locks: nextLocks });
-  }
+function adminUnlock(rowId, field) {
+  const clear = { ...(activePage?.rows?.find((x) => x.id === rowId)?.locks || {}), [field]: null };
+  updateRow(rowId, { locks: clear });
+}
+
 
   function tickMilestone(row, field, checked) {
     if (!row) return;
     const locked = !!row?.locks?.[field];
     if (locked && !isAdmin) return;
+function tickMilestone(row, field, checked) {
+  if (!row) return;
 
+  const locked = !!row?.locks?.[field];
+
+  // Guests: can only tick ONCE if not locked; cannot untick
+  if (isGuest) {
+    if (!checked) return;            // guests cannot untick
+    if (locked) return;              // locked = can't change
+    const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
+    if (!ok) return;
+
+    updateRow(row.id, {
+      [field]: true,
+      locks: { ...(row.locks || {}), [field]: lockInfo() },
+    });
+    return;
+  }
+
+  // Admin: can tick/untick, and UN-tick clears the lock
+  if (!checked) {
+    updateRow(row.id, {
+      [field]: false,
+      locks: { ...(row.locks || {}), [field]: null }, // ✅ remove padlock
+    });
+    return;
+  }
+
+  // Admin ticking ON:
+  // - if already locked, keep existing lock meta
+  // - if not locked, optionally leave unlocked (or lock it). Usually keep unlocked.
+  updateRow(row.id, {
+    [field]: true,
+    locks: { ...(row.locks || {}), [field]: row.locks?.[field] || null },
+  });
+}
     if (isGuest) {
       if (!checked) return; // guests cannot untick
       if (locked) return;
