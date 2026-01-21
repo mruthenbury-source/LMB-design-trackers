@@ -226,7 +226,15 @@ app.http("chat", {
   handler: async (req) => {
     try {
       const { messages, context: appContext, searchBackups } = await req.json();
-
+  
+      // 🔒 BLOCK GUEST USERS
+      if (appContext?.user?.role === "guest") {
+        return {
+          status: 403,
+          jsonBody: { error: "Chat is disabled for guest users" },
+        };
+      }
+      
       const apiKey = process.env.OPENAI_API_KEY;
       const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
