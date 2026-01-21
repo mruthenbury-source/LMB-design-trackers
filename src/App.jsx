@@ -1451,23 +1451,22 @@ export default function App() {
           </div>
         </div>
 
-        <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          searchBackups={chatSearchBackups}
-          setSearchBackups={setChatSearchBackups}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
-        />
-      </>
-    );
-  }
+       {user && (
+  <ChatOverlay
+    open={chatOpen}
+    setOpen={setChatOpen}
+    messages={chatMessages}
+    input={chatInput}
+    setInput={setChatInput}
+    searchBackups={chatSearchBackups}
+    setSearchBackups={setChatSearchBackups}
+    busy={chatBusy}
+    sendChat={sendChat}
+    endRef={chatEndRef}
+    status={chatStatus}
+    onReset={resetChat}
+  />
+)}
 
   /* ---------- VIEW: PROGRAMME SUMMARY (FULL SCREEN) ---------- */
   if (view === VIEW.GANTT_SUMMARY) {
