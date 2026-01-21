@@ -4,7 +4,7 @@ import { BlobServiceClient } from "@azure/storage-blob";
 function getBlobClient() {
   const conn = process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
   const containerName = process.env.STATE_CONTAINER || "workback";
-  if (!conn) throw new Error("Storage connection string is not set (BLOB_CONNECTION_STRING)");
+  if (!conn) throw new Error("Storage connection string is not set (BLOB_CONNECTION_STRING or AzureWebJobsStorage)");
   const service = BlobServiceClient.fromConnectionString(conn);
   const container = service.getContainerClient(containerName);
   return { container };
@@ -29,6 +29,7 @@ function buildSearchableText(row) {
   const parts = [
     row?.projectName,
     row?.pageName,
+    row?.supplier,
     row?.item,
     row?.anchorKey,
     row?.anchorDateISO,
@@ -41,12 +42,10 @@ function buildSearchableText(row) {
 }
 
 function buildBackupIndexFromState(state) {
-  // Mirrors the client-side searchIndex.rows shape (subset).
   const projects = Array.isArray(state?.projects) ? state.projects : [];
   const g1 = Number.isFinite(state?.globalDaysReqToStatusA) ? state.globalDaysReqToStatusA : 0;
   const g2 = Number.isFinite(state?.globalDaysStatusAToFirstIssue) ? state.globalDaysStatusAToFirstIssue : 0;
 
-  // Minimal date computation (server-side copy).
   const parseISO = (value) => {
     if (!value) return null;
     const [y, m, d] = String(value).split("-").map(Number);
@@ -72,6 +71,7 @@ function buildBackupIndexFromState(state) {
     if (!Number.isFinite(n)) return fallback;
     return Math.trunc(n);
   };
+
   const computeDates = ({ anchorKey, anchorDateISO, daysReqToStatusA, daysStatusAToFirstIssue }) => {
     const anchorDt = parseISO(anchorDateISO);
     if (!anchorDt) return { requiredOnSite: "", statusA: "", firstIssue: "" };
@@ -107,8 +107,10 @@ function buildBackupIndexFromState(state) {
   const rows = [];
   projects.forEach((proj) => {
     const supplierByRespId = new Map((proj.responsibilities || []).map((r) => [r.id, r.supplier || ""]));
+
     (proj.pages || []).forEach((pg) => {
       const supplier = supplierByRespId.get(pg.meta?.responsibilityId) || "";
+
       (pg.rows || []).forEach((r) => {
         const d1 = r.overrideDaysReqToStatusA ?? g1;
         const d2 = r.overrideDaysStatusAToFirstIssue ?? g2;
@@ -132,14 +134,10 @@ function buildBackupIndexFromState(state) {
           .join("\n");
 
         rows.push({
-          projectId: proj.id,
           projectName: proj.name,
-          pageId: pg.id,
           pageName: pg.name,
-          rowId: r.id,
-          kind: r.kind,
-          item: r.item,
           supplier,
+          item: r.item,
           anchorKey: r.anchorKey,
           anchorDateISO: r.anchorDateISO,
           requiredOnSite: dates.requiredOnSite,
@@ -169,24 +167,20 @@ async function searchBackups({ queryText, maxBackups = 12, maxMatches = 60 }) {
       name: b.name,
       lastModified: b.properties?.lastModified ? new Date(b.properties.lastModified) : null,
       iso: safeIsoFromBackupName(b.name),
-      size: b.properties?.contentLength ?? null,
     });
   }
-  blobs.sort((a, b) => {
-    const da = a.lastModified?.getTime() ?? 0;
-    const db = b.lastModified?.getTime() ?? 0;
-    return db - da;
-  });
 
+  blobs.sort((a, b) => (b.lastModified?.getTime() ?? 0) - (a.lastModified?.getTime() ?? 0));
   const scan = blobs.slice(0, maxBackups);
-  const matches = [];
 
+  const matches = [];
   for (const meta of scan) {
     if (matches.length >= maxMatches) break;
 
     const blob = container.getBlobClient(meta.name);
     const dl = await blob.download();
     const text = await streamToString(dl.readableStreamBody);
+
     let state = null;
     try {
       state = text ? JSON.parse(text) : null;
@@ -225,16 +219,16 @@ app.http("chat", {
   authLevel: "anonymous",
   handler: async (req) => {
     try {
-      const { messages, context: appContext, searchBackups } = await req.json();
-  
-      // 🔒 BLOCK GUEST USERS
-      if (appContext?.user?.role === "guest") {
+      const { messages, context: appContext, searchBackups: wantBackups } = await req.json();
+
+      // 🔒 Server-side safety: block supplier/guest users even if they try to call the endpoint directly.
+      if (appContext?.user?.role === "guest" || appContext?.user?.isGuest === true) {
         return {
           status: 403,
           jsonBody: { error: "Chat is disabled for guest users" },
         };
       }
-      
+
       const apiKey = process.env.OPENAI_API_KEY;
       const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
@@ -254,17 +248,16 @@ app.http("chat", {
         "If something is missing, say what you’d need. " +
         "If BACKUP_SEARCH_RESULTS is provided, treat it as historic snapshot data (may not match current state).";
 
-      // Optional: search weekly backups (blob snapshots) for the user's latest query.
-      // We only pass *matching* rows into the model to keep the context small.
-      let extraBackupContext = null;
-      if (searchBackups) {
+      let backupContext = null;
+      if (wantBackups) {
         const lastUser = Array.isArray(messages)
           ? [...messages].reverse().find((m) => m?.role === "user" && String(m?.content || "").trim())
           : null;
         const queryText = String(lastUser?.content || "");
+
         try {
           const r = await searchBackups({ queryText });
-          extraBackupContext = {
+          backupContext = {
             enabled: true,
             query: queryText,
             backupsScanned: r.backupsScanned,
@@ -272,7 +265,7 @@ app.http("chat", {
             matches: r.matches,
           };
         } catch (e) {
-          extraBackupContext = { enabled: true, error: String(e?.message || e) };
+          backupContext = { enabled: true, error: String(e?.message || e) };
         }
       }
 
@@ -281,7 +274,10 @@ app.http("chat", {
         {
           role: "system",
           content: `APP_CONTEXT_JSON:\n${JSON.stringify(
-            { ...(appContext ?? {}), ...(extraBackupContext ? { BACKUP_SEARCH_RESULTS: extraBackupContext } : {}) },
+            {
+              ...(appContext ?? {}),
+              ...(backupContext ? { BACKUP_SEARCH_RESULTS: backupContext } : {}),
+            },
             null,
             2
           )}`,
@@ -304,7 +300,6 @@ app.http("chat", {
       });
 
       const data = await r.json().catch(() => ({}));
-
       if (!r.ok) {
         return {
           status: 500,
@@ -316,10 +311,7 @@ app.http("chat", {
         };
       }
 
-      const answer =
-        data?.output_text ||
-        data?.output?.[0]?.content?.[0]?.text ||
-        "No response text returned.";
+      const answer = data?.output_text || data?.output?.[0]?.content?.[0]?.text || "No response text returned.";
 
       return {
         status: 200,
