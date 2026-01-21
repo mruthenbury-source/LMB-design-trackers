@@ -1128,7 +1128,7 @@ export default function App() {
 
   function exportSummaryPDF() {
     openPrintWindow({
-      title: `LMB Design Programme and Trackers — Summary (${summaryFilter.toUpperCase()})`,
+      title: `SupplyTrack — Summary (${summaryFilter.toUpperCase()})`,
       subtitle: `Generated: ${isoToday()} • Traffic based on Status A date`,
       tableHead: ["Status", "Traffic", "Project", "Responsibility", "Supplier", "Item", "Req. on Site", "Status A", "First Issue"],
       tableRows: filteredSummary.map((r) => [
@@ -1297,7 +1297,7 @@ export default function App() {
           <div style={styles.page}>
             <div style={styles.header}>
               <div>
-                <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
+                <h1 style={styles.h1}>SupplyTrack</h1>
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
             </div>
