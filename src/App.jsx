@@ -1803,12 +1803,6 @@ function ProjectView(props) {
       return;
     }
 
-    // admin toggle; unlocking is explicit via the unlock button
-    updateRow(row.id, {
-      [field]: checked,
-    });
-  }
-
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
