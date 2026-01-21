@@ -1128,7 +1128,7 @@ export default function App() {
 
   function exportSummaryPDF() {
     openPrintWindow({
-      title: `SupplyTrack — Summary (${summaryFilter.toUpperCase()})`,
+      title: `LMB Design Programme and Trackers — Summary (${summaryFilter.toUpperCase()})`,
       subtitle: `Generated: ${isoToday()} • Traffic based on Status A date`,
       tableHead: ["Status", "Traffic", "Project", "Responsibility", "Supplier", "Item", "Req. on Site", "Status A", "First Issue"],
       tableRows: filteredSummary.map((r) => [
@@ -1297,7 +1297,7 @@ export default function App() {
           <div style={styles.page}>
             <div style={styles.header}>
               <div>
-                <h1 style={styles.h1}>SupplyTrack</h1>
+                <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
             </div>
@@ -1773,55 +1773,24 @@ function ProjectView(props) {
   }, [activeProject, activePage, allowedPages, isGuest, authUser, setActivePageId]);
 
   // ---------------- Locks: guest confirm -> lock, admin unlock ----------------
-// ---------------- Locks: guest confirm -> lock, admin unlock ----------------
-function lockInfo() {
-  return {
-    lockedBy: authUser?.userDetails || authUser?.userId || "guest",
-    lockedAt: new Date().toISOString(),
-  };
-}
-
-function adminUnlock(rowId, field) {
-  const row = activePage?.rows?.find((x) => x.id === rowId);
-  const nextLocks = { ...(row?.locks || {}), [field]: null };
-  updateRow(rowId, { locks: nextLocks });
-}
-
-function tickMilestone(row, field, checked) {
-  if (!row) return;
-
-  const locked = !!row?.locks?.[field];
-
-  // Guests: can only tick ONCE if not locked; cannot untick
-  if (isGuest) {
-    if (!checked) return;          // guests cannot untick
-    if (locked) return;            // locked = can't change
-
-    const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
-    if (!ok) return;
-
-    updateRow(row.id, {
-      [field]: true,
-      locks: { ...(row.locks || {}), [field]: lockInfo() },
-    });
-    return;
+  function lockInfo() {
+    return {
+      lockedBy: authUser?.userDetails || authUser?.userId || "guest",
+      lockedAt: new Date().toISOString(),
+    };
   }
 
-  // Admin: can tick/untick. Unticking clears the lock so guests can tick again.
-  if (!checked) {
-    updateRow(row.id, {
-      [field]: false,
-      locks: { ...(row.locks || {}), [field]: null }, // ✅ clears padlock
-    });
-    return;
+  function adminUnlock(rowId, field) {
+    const row = (activePage?.rows || []).find((x) => x.id === rowId);
+    const nextLocks = { ...(row?.locks || {}), [field]: null };
+    updateRow(rowId, { locks: nextLocks });
   }
 
-  // Admin ticking ON: keep existing lock meta if any; otherwise leave unlocked
-  updateRow(row.id, {
-    [field]: true,
-    locks: { ...(row.locks || {}), [field]: row.locks?.[field] || null },
-  });
-}
+  function tickMilestone(row, field, checked) {
+    if (!row) return;
+    const locked = !!row?.locks?.[field];
+    if (locked && !isAdmin) return;
+
     if (isGuest) {
       if (!checked) return; // guests cannot untick
       if (locked) return;
@@ -1834,7 +1803,11 @@ function tickMilestone(row, field, checked) {
       return;
     }
 
-  
+    // admin toggle; unlocking is explicit via the unlock button
+    updateRow(row.id, {
+      [field]: checked,
+    });
+  }
 
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
   const SelectorBar = () => (
