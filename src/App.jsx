@@ -1773,30 +1773,30 @@ function ProjectView(props) {
   }, [activeProject, activePage, allowedPages, isGuest, authUser, setActivePageId]);
 
   // ---------------- Locks: guest confirm -> lock, admin unlock ----------------
-  function lockInfo() {
-    return {
-      lockedBy: authUser?.userDetails || authUser?.userId || "guest",
-      lockedAt: new Date().toISOString(),
-    };
-  }
-
-function adminUnlock(rowId, field) {
-  const clear = { ...(activePage?.rows?.find((x) => x.id === rowId)?.locks || {}), [field]: null };
-  updateRow(rowId, { locks: clear });
+// ---------------- Locks: guest confirm -> lock, admin unlock ----------------
+function lockInfo() {
+  return {
+    lockedBy: authUser?.userDetails || authUser?.userId || "guest",
+    lockedAt: new Date().toISOString(),
+  };
 }
 
+function adminUnlock(rowId, field) {
+  const row = activePage?.rows?.find((x) => x.id === rowId);
+  const nextLocks = { ...(row?.locks || {}), [field]: null };
+  updateRow(rowId, { locks: nextLocks });
+}
 
-  function tickMilestone(row, field, checked) {
-    if (!row) return;
-    const locked = !!row?.locks?.[field];
-    if (locked && !isAdmin) return;
+function tickMilestone(row, field, checked) {
+  if (!row) return;
 
   const locked = !!row?.locks?.[field];
 
   // Guests: can only tick ONCE if not locked; cannot untick
   if (isGuest) {
-    if (!checked) return;            // guests cannot untick
-    if (locked) return;              // locked = can't change
+    if (!checked) return;          // guests cannot untick
+    if (locked) return;            // locked = can't change
+
     const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
     if (!ok) return;
 
@@ -1807,18 +1807,16 @@ function adminUnlock(rowId, field) {
     return;
   }
 
-  // Admin: can tick/untick, and UN-tick clears the lock
+  // Admin: can tick/untick. Unticking clears the lock so guests can tick again.
   if (!checked) {
     updateRow(row.id, {
       [field]: false,
-      locks: { ...(row.locks || {}), [field]: null }, // ✅ remove padlock
+      locks: { ...(row.locks || {}), [field]: null }, // ✅ clears padlock
     });
     return;
   }
 
-  // Admin ticking ON:
-  // - if already locked, keep existing lock meta
-  // - if not locked, optionally leave unlocked (or lock it). Usually keep unlocked.
+  // Admin ticking ON: keep existing lock meta if any; otherwise leave unlocked
   updateRow(row.id, {
     [field]: true,
     locks: { ...(row.locks || {}), [field]: row.locks?.[field] || null },
