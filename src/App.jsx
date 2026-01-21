@@ -473,6 +473,65 @@ export default function App() {
   const [view, setView] = useState(VIEW.LANDING);
   const didHydrateRef = useRef(false);
 
+  /* ---------------- STATE PERSISTENCE (Blob + localStorage) ---------------- */
+  const [saveStatus, setSaveStatus] = useState("idle"); // "idle" | "saving" | "saved" | "error"
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const saveDebounceRef = useRef(null);
+
+  const statePayload = useMemo(
+    () => ({
+      globalDaysReqToStatusA,
+      globalDaysStatusAToFirstIssue,
+      projects,
+      activeProjectId,
+      activePageId,
+      view,
+      summaryFilter,
+      summaryProjectId,
+      summarySupplier,
+    }),
+    [
+      globalDaysReqToStatusA,
+      globalDaysStatusAToFirstIssue,
+      projects,
+      activeProjectId,
+      activePageId,
+      view,
+      summaryFilter,
+      summaryProjectId,
+      summarySupplier,
+    ]
+  );
+
+  const saveToBlobNow = useCallback(
+    async (payload) => {
+      // If auth is still loading, don't attempt writes yet
+      if (authUser === undefined) return;
+
+      setSaveStatus("saving");
+      setSaveError(null);
+
+      try {
+        const res = await fetch("/api/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: payload }),
+        });
+
+        if (!res.ok) throw new Error(`State save failed (${res.status})`);
+
+        setSaveStatus("saved");
+        setLastSavedAt(new Date().toISOString());
+      } catch (e) {
+        setSaveStatus("error");
+        setSaveError(String(e?.message || e));
+      }
+    },
+    [authUser]
+  );
+
+
   /* ---------------- AUTH + PERMISSIONS (Azure Static Web Apps) ---------------- */
   const [authUser, setAuthUser] = useState(undefined); // undefined=loading, null=anonymous, object=logged in
 
@@ -741,40 +800,30 @@ export default function App() {
   }, []);
   
 
-  /* ---- persist ---- */
+  /* ---- persist (Blob + localStorage) ---- */
   useEffect(() => {
     // ✅ prevent overwriting saved data on the first render
     if (!didHydrateRef.current) return;
-  
-    const payload = {
-      globalDaysReqToStatusA,
-      globalDaysStatusAToFirstIssue,
-      projects,
-      activeProjectId,
-      activePageId,
-      view,
-      summaryFilter,
-      summaryProjectId,
-      summarySupplier,
-    };
-  
+
+    // always keep localStorage updated for offline fallback
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(payload));
+      localStorage.setItem(LS_KEY, JSON.stringify(statePayload));
     } catch {
       // ignore
     }
-  }, [
-    globalDaysReqToStatusA,
-    globalDaysStatusAToFirstIssue,
-    projects,
-    activeProjectId,
-    activePageId,
-    view,
-    summaryFilter,
-    summaryProjectId,
-    summarySupplier,
-  ]);
-  
+
+    // Debounced Blob save (avoid writes on every keystroke)
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = setTimeout(() => {
+      saveToBlobNow(statePayload);
+    }, 850);
+
+    return () => {
+      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    };
+  }, [statePayload, saveToBlobNow]);
+
+
   /* ---- derived active project/page ---- */
   const projectPool = useMemo(() => {
     if (isAdmin) return projects;
@@ -1369,7 +1418,41 @@ export default function App() {
     }
   }
 
-  /* ---------- boot routing + loading screen ---------- */
+  
+  const onSaveNow = useCallback(() => {
+    // flush any queued debounce and save immediately
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveToBlobNow(statePayload);
+  }, [saveToBlobNow, statePayload]);
+
+  function SaveStatusButton() {
+    const label =
+      saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Save failed" : saveStatus === "saved" ? "Saved" : "Save";
+
+    const title =
+      saveStatus === "error"
+        ? saveError || "Save failed."
+        : saveStatus === "saved" && lastSavedAt
+        ? `Saved ${new Date(lastSavedAt).toLocaleString()}`
+        : "Save to Azure Blob";
+
+    const style =
+      saveStatus === "saved"
+        ? styles.savePillSaved
+        : saveStatus === "saving"
+        ? styles.savePillSaving
+        : saveStatus === "error"
+        ? styles.savePillError
+        : styles.savePillIdle;
+
+    return (
+      <button style={{ ...styles.savePillBase, ...style }} onClick={onSaveNow} title={title} type="button">
+        {label}
+      </button>
+    );
+  }
+
+/* ---------- boot routing + loading screen ---------- */
   const isBooting = isHydrating || authUser === undefined;
   const didInitialRouteRef = useRef(false);
 
@@ -1433,6 +1516,9 @@ export default function App() {
               <div>
                 <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
+              </div>
+              <div style={styles.headerButtons}>
+                <SaveStatusButton />
               </div>
             </div>
 
@@ -1608,6 +1694,7 @@ export default function App() {
                 <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
               </div>
               <div style={styles.headerButtons}>
+                <SaveStatusButton />
                 <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                   Home
                 </button>
@@ -1785,6 +1872,7 @@ export default function App() {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
+          saveButton={<SaveStatusButton />}
         />
       </div>
 
@@ -1844,7 +1932,8 @@ function ProjectView(props) {
     setGlobalDaysStatusAToFirstIssue,
     isMasterPage,
     setView,
-    VIEW,
+    VIEW,,
+    saveButton
   } = props;
 
   // Pages a guest is allowed to see inside the active project
@@ -2041,6 +2130,8 @@ function tickMilestone(row, field, checked) {
           <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
         </div>
         <div style={styles.headerButtons}>
+          {saveButton}
+
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
@@ -2762,6 +2853,22 @@ const styles = {
 
   primaryBtn: { background: TEAL, color: "white", border: `1px solid ${TEAL}`, borderRadius: 14, padding: "10px 12px", fontSize: 12, cursor: "pointer", fontWeight: 900 },
   secondaryBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 14, padding: "10px 12px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
+
+  // Save status pill (Blob)
+  savePillBase: {
+    borderRadius: 999,
+    padding: "8px 12px",
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: "pointer",
+    border: "1px solid transparent",
+    whiteSpace: "nowrap",
+  },
+  savePillIdle: { background: "#FFFFFF", color: "#111827", borderColor: "#D1D5DB" },
+  savePillSaving: { background: "#F3F4F6", color: "#111827", borderColor: "#D1D5DB" },
+  savePillSaved: { background: "#10B981", color: "#FFFFFF", borderColor: "#10B981" },
+  savePillError: { background: "#FEF2F2", color: "#991B1B", borderColor: "#FCA5A5" },
+
   smallBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
   iconBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer" },
   unlockBtn: { background: "#FEF2F2", color: "#991B1B", border: "1px solid #FCA5A5", borderRadius: 999, padding: "6px 8px", fontSize: 11, cursor: "pointer", fontWeight: 900 },
