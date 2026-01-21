@@ -1932,7 +1932,7 @@ function ProjectView(props) {
     setGlobalDaysStatusAToFirstIssue,
     isMasterPage,
     setView,
-    VIEW,,
+    VIEW,
     saveButton
   } = props;
 
