@@ -613,124 +613,160 @@ export default function App() {
     return () => clearTimeout(t);
   }, [chatOpen, chatMessages]);
 
-  /* ---- load ---- */
-  useEffect(() => {
+ /* ---- load ---- */
+useEffect(() => {
+  let cancelled = false;
+
+  async function hydrateFromPayload(parsed) {
+    if (!parsed) return;
+
+    if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
+    if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
+
+    if (Array.isArray(parsed.projects) && parsed.projects.length) {
+      const hydrated = parsed.projects.map((proj) => {
+        const master =
+          Array.isArray(proj.master) && proj.master.length
+            ? proj.master.map((m) => ({
+                id: m.id || uid(),
+                blockZone: m.blockZone || "",
+                levels:
+                  Array.isArray(m.levels) && m.levels.length
+                    ? m.levels.map((lv, idx) => ({
+                        id: lv.id || uid(),
+                        name: lv.name || `Level ${idx + 1}`,
+                        startDate: lv.startDate || "",
+                        finishDate: lv.finishDate || "",
+                      }))
+                    : [defaultLevel("Level 1")],
+              }))
+            : [defaultMasterRow()];
+
+        const responsibilities =
+          Array.isArray(proj.responsibilities) && proj.responsibilities.length
+            ? proj.responsibilities.map((r) => ({
+                id: r.id || uid(),
+                name: r.name || "",
+                supplier: r.supplier || "",
+              }))
+            : [defaultResponsibility()];
+
+        const pages =
+          Array.isArray(proj.pages) && proj.pages.length
+            ? proj.pages.map((pg) => {
+                const rawName = pg.name || "Untitled Page";
+                const migratedName = pg.meta?.isMaster && rawName === "Master" ? "Project Home" : rawName;
+
+                return {
+                  id: pg.id || uid(),
+                  name: migratedName,
+                  rows: Array.isArray(pg.rows)
+                    ? pg.rows.map((r) => ({
+                        ...defaultRow(r.kind || "item"),
+                        ...r,
+                        id: r.id || uid(),
+                        kind: r.kind || "item",
+                        completed: !!r.completed,
+                        notRequired: !!r.notRequired,
+                        statusADone: !!r.statusADone,
+                        firstIssueDone: !!r.firstIssueDone,
+                        locks: {
+                          statusADone: r?.locks?.statusADone || null,
+                          firstIssueDone: r?.locks?.firstIssueDone || null,
+                        },
+                        comments: Array.isArray(r?.comments) ? r.comments : [],
+                        meta: {
+                          generated: !!r?.meta?.generated,
+                          blockZone: r?.meta?.blockZone || "",
+                          levelId: r?.meta?.levelId ?? null,
+                          levelName: r?.meta?.levelName || "",
+                          finishDate: r?.meta?.finishDate || "",
+                        },
+                      }))
+                    : [],
+                  meta: {
+                    generated: !!pg?.meta?.generated,
+                    responsibilityId: pg?.meta?.responsibilityId ?? null,
+                    isMaster: !!pg?.meta?.isMaster,
+                  },
+                };
+              })
+            : [];
+
+        if (!pages.some((p) => p.meta?.isMaster)) {
+          pages.unshift({
+            id: uid(),
+            name: "Project Home",
+            rows: [],
+            meta: { generated: false, responsibilityId: null, isMaster: true },
+          });
+        }
+
+        return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
+      });
+
+      setProjects(hydrated);
+
+      const pid = parsed.activeProjectId || hydrated[0].id;
+      setActiveProjectId(pid);
+
+      const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
+      const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
+      setActivePageId(parsed.activePageId || masterPg.id);
+    }
+
+    if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
+    if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
+    if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
+    if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
+  }
+
+  async function load() {
+    try {
+      // 1) Try server (Azure Blob via /api/state)
+      const res = await fetch("/api/state", { method: "GET" });
+      if (res.ok) {
+        const data = await res.json();
+        const serverState = data?.state ?? null;
+
+        if (!cancelled && serverState) {
+          await hydrateFromPayload(serverState);
+
+          // Optional: mirror to localStorage for offline/fallback
+          try {
+            localStorage.setItem(LS_KEY, JSON.stringify(serverState));
+          } catch {}
+          return;
+        }
+      }
+    } catch {
+      // ignore, fallback to localStorage
+    }
+
+    // 2) Fallback: localStorage (existing behaviour)
     try {
       const raw = localStorage.getItem(LS_KEY);
-      if (!raw) {
-        didHydrateRef.current = true;
-        return;
-      }
-  
+      if (!raw) return;
       const parsed = JSON.parse(raw);
-  
-      if (Number.isFinite(parsed.globalDaysReqToStatusA)) setGlobalDaysReqToStatusA(parsed.globalDaysReqToStatusA);
-      if (Number.isFinite(parsed.globalDaysStatusAToFirstIssue)) setGlobalDaysStatusAToFirstIssue(parsed.globalDaysStatusAToFirstIssue);
-  
-      if (Array.isArray(parsed.projects) && parsed.projects.length) {
-        // your hydration logic (keep as-is)
-        const hydrated = parsed.projects.map((proj) => {
-          const master =
-            Array.isArray(proj.master) && proj.master.length
-              ? proj.master.map((m) => ({
-                  id: m.id || uid(),
-                  blockZone: m.blockZone || "",
-                  levels:
-                    Array.isArray(m.levels) && m.levels.length
-                      ? m.levels.map((lv, idx) => ({
-                          id: lv.id || uid(),
-                          name: lv.name || `Level ${idx + 1}`,
-                          startDate: lv.startDate || "",
-                          finishDate: lv.finishDate || "",
-                        }))
-                      : [defaultLevel("Level 1")],
-                }))
-              : [defaultMasterRow()];
-  
-          const responsibilities =
-            Array.isArray(proj.responsibilities) && proj.responsibilities.length
-              ? proj.responsibilities.map((r) => ({
-                  id: r.id || uid(),
-                  name: r.name || "",
-                  supplier: r.supplier || "",
-                }))
-              : [defaultResponsibility()];
-  
-          const pages =
-            Array.isArray(proj.pages) && proj.pages.length
-              ? proj.pages.map((pg) => {
-                  const rawName = pg.name || "Untitled Page";
-                  const migratedName = pg.meta?.isMaster && rawName === "Master" ? "Project Home" : rawName;
-  
-                  return {
-                    id: pg.id || uid(),
-                    name: migratedName,
-                    rows: Array.isArray(pg.rows)
-                      ? pg.rows.map((r) => ({
-                          ...defaultRow(r.kind || "item"),
-                          ...r,
-                          id: r.id || uid(),
-                          kind: r.kind || "item",
-                          completed: !!r.completed,
-                          notRequired: !!r.notRequired,
-                          statusADone: !!r.statusADone,
-                          firstIssueDone: !!r.firstIssueDone,
-                          locks: {
-                            statusADone: r?.locks?.statusADone || null,
-                            firstIssueDone: r?.locks?.firstIssueDone || null,
-                          },
-                          comments: Array.isArray(r?.comments) ? r.comments : [],
-                          meta: {
-                            generated: !!r?.meta?.generated,
-                            blockZone: r?.meta?.blockZone || "",
-                            levelId: r?.meta?.levelId ?? null,
-                            levelName: r?.meta?.levelName || "",
-                            finishDate: r?.meta?.finishDate || "",
-                          },
-                        }))
-                      : [],
-                    meta: {
-                      generated: !!pg?.meta?.generated,
-                      responsibilityId: pg?.meta?.responsibilityId ?? null,
-                      isMaster: !!pg?.meta?.isMaster,
-                    },
-                  };
-                })
-              : [];
-  
-          if (!pages.some((p) => p.meta?.isMaster)) {
-            pages.unshift({
-              id: uid(),
-              name: "Project Home",
-              rows: [],
-              meta: { generated: false, responsibilityId: null, isMaster: true },
-            });
-          }
-  
-          return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
-        });
-  
-        setProjects(hydrated);
-  
-        const pid = parsed.activeProjectId || hydrated[0].id;
-        setActiveProjectId(pid);
-  
-        const proj0 = hydrated.find((p) => p.id === pid) || hydrated[0];
-        const masterPg = proj0.pages.find((p) => p.meta?.isMaster) || proj0.pages[0];
-        setActivePageId(parsed.activePageId || masterPg.id);
-      }
-  
-      if (parsed.view && Object.values(VIEW).includes(parsed.view)) setView(parsed.view);
-      if (typeof parsed.summaryFilter === "string") setSummaryFilter(parsed.summaryFilter);
-      if (typeof parsed.summaryProjectId === "string") setSummaryProjectId(parsed.summaryProjectId);
-      if (typeof parsed.summarySupplier === "string") setSummarySupplier(parsed.summarySupplier);
+      if (!cancelled) await hydrateFromPayload(parsed);
     } catch {
       // ignore
-    } finally {
-      // ✅ only start saving AFTER we've attempted hydration
-      didHydrateRef.current = true;
     }
-  }, []);
+  }
+
+  (async () => {
+    try {
+      await load();
+    } finally {
+      if (!cancelled) didHydrateRef.current = true;
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
+
   
 
   /* ---- persist ---- */
