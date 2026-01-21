@@ -1860,6 +1860,7 @@ export default function App() {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
+          saveButton={saveButton}
         />
       </div>
 
@@ -1920,6 +1921,7 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
+    saveButton,
   } = props;
 
   // Pages a guest is allowed to see inside the active project
