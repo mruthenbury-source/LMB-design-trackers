@@ -39,6 +39,53 @@ function clampInt(v, fallback = 0) {
 function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
+
+/* ---------- Save status pill (header) ---------- */
+function SaveStatusButton({ status, lastSavedAt, error, onClick }) {
+  const formatTime = (d) => {
+    try {
+      if (!d) return "";
+      const dt = typeof d === "string" ? new Date(d) : d;
+      if (!(dt instanceof Date) || Number.isNaN(dt.getTime())) return "";
+      return dt.toLocaleString();
+    } catch {
+      return "";
+    }
+  };
+
+  const s = String(status || "idle");
+  const label =
+    s === "saved"
+      ? `Saved${lastSavedAt ? ` · ${formatTime(lastSavedAt)}` : ""}`
+      : s === "saving"
+        ? "Saving…"
+        : s === "error"
+          ? "Save failed"
+          : "Not saved";
+
+  const bg = s === "saved" ? "#10B981" : s === "saving" ? "#F59E0B" : s === "error" ? "#EF4444" : "#9CA3AF";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={s === "error" ? String(error || "Save failed") : "Syncs to Azure Blob automatically"}
+      style={{
+        border: "none",
+        borderRadius: 999,
+        padding: "8px 12px",
+        fontWeight: 900,
+        fontSize: 12,
+        color: "white",
+        background: bg,
+        boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
 function clean(text) {
   return String(text ?? "").trim();
 }
@@ -474,45 +521,6 @@ export default function App() {
   const saveTimerRef = useRef(null);
   const lastSavedJsonRef = useRef(null);
 
-  const formatTime = (d) => {
-    try {
-      if (!d) return "";
-      const dt = typeof d === "string" ? new Date(d) : d;
-      if (!(dt instanceof Date) || Number.isNaN(dt.getTime())) return "";
-      return dt.toLocaleString();
-    } catch {
-      return "";
-    }
-  };
-
-  function SaveStatusButton({ status, lastSavedAt, error, onClick }) {
-    const s = String(status || "idle");
-    const label =
-      s === "saved" ? `Saved${lastSavedAt ? ` · ${formatTime(lastSavedAt)}` : ""}` : s === "saving" ? "Saving…" : s === "error" ? "Save failed" : "Not saved";
-
-    const bg = s === "saved" ? "#10B981" : s === "saving" ? "#F59E0B" : s === "error" ? "#EF4444" : "#9CA3AF";
-
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        title={s === "error" ? String(error || "Save failed") : "Syncs to Azure Blob automatically"}
-        style={{
-          border: "none",
-          borderRadius: 999,
-          padding: "8px 12px",
-          fontWeight: 900,
-          fontSize: 12,
-          color: "white",
-          background: bg,
-          boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
-          cursor: "pointer",
-        }}
-      >
-        {label}
-      </button>
-    );
-  }
 
   /* ---------------- AUTH + PERMISSIONS (Azure Static Web Apps) ---------------- */
   const [authUser, setAuthUser] = useState(undefined); // undefined=loading, null=anonymous, object=logged in
@@ -1499,7 +1507,7 @@ if (authUser === undefined) {
                 <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
               <div style={styles.headerButtons}>
-                <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
+                <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={onSaveNow} />
               </div>
             </div>
 
@@ -1847,6 +1855,8 @@ if (authUser === undefined) {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
+          saveInfo={saveInfo}
+          onSaveNow={forceSaveNow}
         />
       </div>
 
@@ -1905,6 +1915,8 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
+    saveInfo,
+    onSaveNow,
   } = props;
 
   // Pages a guest is allowed to see inside the active project
@@ -2099,7 +2111,7 @@ function tickMilestone(row, field, checked) {
           <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
         </div>
         <div style={styles.headerButtons}>
-                <SaveStatusButton status={saveInfo.status} lastSavedAt={saveInfo.lastSavedAt} error={saveInfo.error} onClick={forceSaveNow} />
+          <SaveStatusButton status={saveInfo?.status} lastSavedAt={saveInfo?.lastSavedAt} error={saveInfo?.error} onClick={onSaveNow} />
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
