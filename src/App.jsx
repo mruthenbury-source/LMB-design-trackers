@@ -478,6 +478,7 @@ export default function App() {
   const [lastSavedAt, setLastSavedAt] = useState(null);
   const [saveError, setSaveError] = useState(null);
   const saveDebounceRef = useRef(null);
+  const [authUser, setAuthUser] = useState(undefined); // undefined=loading, null=anonymous, object=logged in
 
   const statePayload = useMemo(
     () => ({
@@ -533,8 +534,7 @@ export default function App() {
 
 
   /* ---------------- AUTH + PERMISSIONS (Azure Static Web Apps) ---------------- */
-  const [authUser, setAuthUser] = useState(undefined); // undefined=loading, null=anonymous, object=logged in
-
+  
   useEffect(() => {
     let cancelled = false;
     (async () => {
