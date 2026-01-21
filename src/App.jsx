@@ -534,6 +534,36 @@ export default function App() {
     );
   }, [projects, isAdmin, hasSupplierAccess]);
 
+  // If a supplier (guest) lands on the app, take them straight to their first available tracker.
+  // This avoids the confusing "landing" page for supplier-only users.
+  useEffect(() => {
+    if (!isGuest) return;
+    if (!authUser) return; // still loading / anonymous
+    if (!visibleProjects?.length) return;
+
+    const proj = visibleProjects[0];
+    const allowedPages = (proj.pages || []).filter((pg) => {
+      if (pg.meta?.isMaster) return false;
+      const respId = pg.meta?.responsibilityId;
+      const resp = (proj.responsibilities || []).find((r) => r.id === respId);
+      const supplier = String(resp?.supplier || "").trim();
+      return supplier && hasSupplierAccess(supplier);
+    });
+    const pageId = allowedPages[0]?.id || null;
+
+    setActiveProjectId((prev) => {
+      if (prev && visibleProjects.some((p) => p.id === prev)) return prev;
+      return proj.id;
+    });
+    if (pageId) {
+      setActivePageId((prev) => {
+        if (prev && allowedPages.some((pg) => pg.id === prev)) return prev;
+        return pageId;
+      });
+    }
+    setView((v) => (v === VIEW.LANDING ? VIEW.PROJECT : v));
+  }, [isGuest, authUser, visibleProjects, hasSupplierAccess]);
+
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
   const [summaryProjectId, setSummaryProjectId] = useState("all");
@@ -567,6 +597,7 @@ export default function App() {
     setChatInput("");
     setChatBusy(false);
     setChatStatus("idle");
+    setChatSearchBackups(false);
   }
 
 
@@ -1217,86 +1248,14 @@ export default function App() {
       bySupplier[key][x.status] += 1;
     });
 
-    // Full, searchable index for the assistant (kept compact but comprehensive).
-    const rowIndex = [];
-    projects.forEach((proj) => {
-      const supplierByRespId = new Map((proj.responsibilities || []).map((r) => [r.id, r.supplier || ""]));
-
-      (proj.pages || []).forEach((pg) => {
-        const supplier = supplierByRespId.get(pg.meta?.responsibilityId) || "";
-        (pg.rows || []).forEach((r) => {
-          const d1 = r.overrideDaysReqToStatusA ?? globalDaysReqToStatusA;
-          const d2 = r.overrideDaysStatusAToFirstIssue ?? globalDaysStatusAToFirstIssue;
-          const dates = computeDates({
-            anchorKey: r.anchorKey,
-            anchorDateISO: r.anchorDateISO,
-            daysReqToStatusA: d1,
-            daysStatusAToFirstIssue: d2,
-          });
-
-          const comments = Array.isArray(r.comments) ? r.comments : [];
-          const commentsText = comments
-            .map((c) => {
-              const who = clean(c?.name);
-              const when = clean(c?.at);
-              const txt = clean(c?.text);
-              return [who, when].filter(Boolean).join(" ") + (txt ? `: ${txt}` : "");
-            })
-            .filter(Boolean)
-            .join("\n");
-
-          rowIndex.push({
-            projectId: proj.id,
-            projectName: proj.name,
-            pageId: pg.id,
-            pageName: pg.name,
-            isMasterPage: !!pg.meta?.isMaster,
-            rowId: r.id,
-            kind: r.kind,
-            item: r.item,
-            supplier,
-            anchorKey: r.anchorKey,
-            anchorDateISO: r.anchorDateISO,
-            requiredOnSite: dates.requiredOnSite,
-            statusA: dates.statusA,
-            firstIssue: dates.firstIssue,
-            completed: !!r.completed,
-            notRequired: !!r.notRequired,
-            statusADone: !!r.statusADone,
-            firstIssueDone: !!r.firstIssueDone,
-            overrideDaysReqToStatusA: r.overrideDaysReqToStatusA,
-            overrideDaysStatusAToFirstIssue: r.overrideDaysStatusAToFirstIssue,
-            commentCount: comments.length,
-            commentsText,
-          });
-        });
-      });
-    });
-
-    const programmeIndex = [];
-    projects.forEach((proj) => {
-      (proj.master || []).forEach((m) => {
-        const bz = clean(m.blockZone);
-        (m.levels || []).forEach((lv) => {
-          const startISO = lv?.startDate || "";
-          const finishISO = lv?.finishDate || "";
-          const durationDays = diffDaysUTC(startISO, finishISO);
-          programmeIndex.push({
-            projectId: proj.id,
-            projectName: proj.name,
-            blockZone: bz,
-            levelId: lv?.id || "",
-            levelName: lv?.name || "",
-            startDate: startISO,
-            finishDate: finishISO,
-            durationDays,
-          });
-        });
-      });
-    });
-
     return {
       today: isoToday(),
+      user: {
+        role: isGuest ? "guest" : "admin",
+        isGuest,
+        isAdmin,
+        roles: authRoles,
+      },
       view,
       activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
       activePage: activePage ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster } : null,
@@ -1326,13 +1285,9 @@ export default function App() {
           traffic: x.traffic,
         })),
       },
-      searchIndex: {
-        rows: rowIndex,
-        programmeLevels: programmeIndex,
-      },
       bySupplier,
     };
-  }, [summaryItems, view, activeProject, activePage, projects, globalDaysReqToStatusA, globalDaysStatusAToFirstIssue]);
+  }, [summaryItems, view, activeProject, activePage, projects, isGuest, isAdmin, authRoles]);
 
   async function sendChat() {
     const text = chatInput.trim();
@@ -1451,20 +1406,22 @@ export default function App() {
           </div>
         </div>
 
-        <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          searchBackups={chatSearchBackups}
-          setSearchBackups={setChatSearchBackups}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
-        />
+        {!isGuest ? (
+          <ChatOverlay
+            open={chatOpen}
+            setOpen={setChatOpen}
+            messages={chatMessages}
+            input={chatInput}
+            setInput={setChatInput}
+            searchBackups={chatSearchBackups}
+            setSearchBackups={setChatSearchBackups}
+            busy={chatBusy}
+            sendChat={sendChat}
+            endRef={chatEndRef}
+            status={chatStatus}
+            onReset={resetChat}
+          />
+        ) : null}
       </>
     );
   }
@@ -1523,20 +1480,22 @@ export default function App() {
           </div>
         </div>
 
-        <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          searchBackups={chatSearchBackups}
-          setSearchBackups={setChatSearchBackups}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
-        />
+        {!isGuest ? (
+          <ChatOverlay
+            open={chatOpen}
+            setOpen={setChatOpen}
+            messages={chatMessages}
+            input={chatInput}
+            setInput={setChatInput}
+            searchBackups={chatSearchBackups}
+            setSearchBackups={setChatSearchBackups}
+            busy={chatBusy}
+            sendChat={sendChat}
+            endRef={chatEndRef}
+            status={chatStatus}
+            onReset={resetChat}
+          />
+        ) : null}
       </>
     );
   }
@@ -1670,20 +1629,22 @@ export default function App() {
           </div>
         </div>
 
-        <ChatOverlay
-          open={chatOpen}
-          setOpen={setChatOpen}
-          messages={chatMessages}
-          input={chatInput}
-          setInput={setChatInput}
-          searchBackups={chatSearchBackups}
-          setSearchBackups={setChatSearchBackups}
-          busy={chatBusy}
-          sendChat={sendChat}
-          endRef={chatEndRef}
-          status={chatStatus}
-          onReset={resetChat}
-        />
+        {!isGuest ? (
+          <ChatOverlay
+            open={chatOpen}
+            setOpen={setChatOpen}
+            messages={chatMessages}
+            input={chatInput}
+            setInput={setChatInput}
+            searchBackups={chatSearchBackups}
+            setSearchBackups={setChatSearchBackups}
+            busy={chatBusy}
+            sendChat={sendChat}
+            endRef={chatEndRef}
+            status={chatStatus}
+            onReset={resetChat}
+          />
+        ) : null}
       </>
     );
   }
@@ -1729,20 +1690,22 @@ export default function App() {
         />
       </div>
 
-      <ChatOverlay
-        open={chatOpen}
-        setOpen={setChatOpen}
-        messages={chatMessages}
-        input={chatInput}
-        setInput={setChatInput}
-        searchBackups={chatSearchBackups}
-        setSearchBackups={setChatSearchBackups}
-        busy={chatBusy}
-        sendChat={sendChat}
-        endRef={chatEndRef}
-        status={chatStatus}
-        onReset={resetChat}
-      />
+      {!isGuest ? (
+        <ChatOverlay
+          open={chatOpen}
+          setOpen={setChatOpen}
+          messages={chatMessages}
+          input={chatInput}
+          setInput={setChatInput}
+          searchBackups={chatSearchBackups}
+          setSearchBackups={setChatSearchBackups}
+          busy={chatBusy}
+          sendChat={sendChat}
+          endRef={chatEndRef}
+          status={chatStatus}
+          onReset={resetChat}
+        />
+      ) : null}
     </>
   );
 }

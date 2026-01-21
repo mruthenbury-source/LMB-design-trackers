@@ -272,7 +272,7 @@ const styles = {
     height: 14,
   },
   checkboxLabel: {
-    fontWeight: 700,
+    fontWeight: 900,
   },
 
   textarea: {
