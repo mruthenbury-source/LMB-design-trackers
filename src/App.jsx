@@ -1503,12 +1503,9 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                <div>
-                  <h1 style={styles.h1}>SupplySync</h1>
-                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
-                </div>
+              <div>
+                <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
+                <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
               <div style={styles.headerButtons}>{saveButton}</div>
             </div>
@@ -1680,12 +1677,9 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                <div>
-                  <h1 style={styles.h1}>Summary</h1>
-                  <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
-                </div>
+              <div>
+                <h1 style={styles.h1}>Summary</h1>
+                <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
               </div>
               <div style={styles.headerButtons}>
                 {saveButton}
@@ -2119,12 +2113,9 @@ function tickMilestone(row, field, checked) {
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <div style={styles.brandRow}>
-          <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-          <div>
-            <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
-            <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
-          </div>
+        <div>
+          <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
+          <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
         </div>
         <div style={styles.headerButtons}>
                 {saveButton}
@@ -2740,19 +2731,26 @@ function FilterPill({ label, active, onClick }) {
 
 /* ---------- styles ---------- */
 const MAX_W = 1320;
-const TEAL = "#0D9488";
+
+// SupplySync brand palette (visual only)
+const BRAND_NAVY = "#0B1F3B";
+const BRAND_BLUE = "#2563EB";
+const BRAND_TEAL = "#0D9488";
+const BRAND_LINE = "#E5E7EB";
+const BG_TOP = "#F8FAFF";
+const BG_BOTTOM = "#F3F7FF";
 
 const styles = {
   shell: {
     minHeight: "100vh",
-    background: "linear-gradient(180deg, #F8FAFC 0%, #F3F4F6 100%)",
+    background: `linear-gradient(180deg, ${BG_TOP} 0%, ${BG_BOTTOM} 100%)`,
   },
 
   page: {
     fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial",
     padding: 16,
     margin: "0 auto",
-    color: "#111827",
+    color: BRAND_NAVY,
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
@@ -2767,45 +2765,49 @@ const styles = {
     flexWrap: "wrap",
     width: "100%",
     maxWidth: MAX_W,
+    background: "rgba(255,255,255,0.75)",
+    border: `1px solid ${BRAND_LINE}`,
+    borderRadius: 18,
+    padding: 14,
+    boxShadow: "0 12px 30px rgba(11,31,59,0.06)",
+    backdropFilter: "blur(10px)",
   },
   headerButtons: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
-  brandRow: { display: "flex", gap: 12, alignItems: "center" },
-  brandLogo: { width: 44, height: 44, objectFit: "contain" },
-
   savePill: { padding: "8px 12px", borderRadius: 12, border: "1px solid #E5E7EB", fontWeight: 900, fontSize: 12, cursor: "pointer" },
-  h1: { fontSize: 22, margin: 0, lineHeight: 1.2, fontWeight: 900 },
+  h1: { fontSize: 22, margin: 0, lineHeight: 1.2, fontWeight: 950, letterSpacing: -0.3 },
   h2: { fontSize: 15, margin: 0, lineHeight: 1.2, fontWeight: 900 },
   h3: { fontSize: 13, margin: 0, lineHeight: 1.2, fontWeight: 900 },
-  sub: { margin: "6px 0 0", color: "#4B5563", fontSize: 13 },
-  muted: { color: "#6B7280", fontSize: 12 },
+  sub: { margin: "6px 0 0", color: "rgba(11,31,59,0.70)", fontSize: 13 },
+  muted: { color: "rgba(11,31,59,0.55)", fontSize: 12 },
 
   card: {
     background: "rgba(255,255,255,0.9)",
-    border: "1px solid #E5E7EB",
-    borderRadius: 16,
+    border: `1px solid ${BRAND_LINE}`,
+    borderRadius: 18,
     padding: 14,
     marginBottom: 12,
-    boxShadow: "0 6px 20px rgba(17,24,39,0.06)",
+    boxShadow: "0 12px 40px rgba(11,31,59,0.07)",
     width: "100%",
     maxWidth: MAX_W,
     backdropFilter: "blur(6px)",
   },
   cardInset: { border: "1px solid #E5E7EB", borderRadius: 14, padding: 10, background: "#FFFFFF" },
-  sectionTitle: { fontSize: 12, color: "#6B7280" },
+  sectionTitle: { fontSize: 12, color: "rgba(11,31,59,0.55)" },
   cardHeader: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 10, flexWrap: "wrap" },
 
   grid2: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 },
-  label: { display: "grid", gap: 6, fontSize: 13, color: "#374151" },
+  label: { display: "grid", gap: 6, fontSize: 13, color: "rgba(11,31,59,0.80)" },
 
   input: {
     width: "100%",
     boxSizing: "border-box",
-    border: "1px solid #D1D5DB",
+    border: "1px solid #D6DEE8",
     borderRadius: 12,
     padding: "8px 10px",
     fontSize: 12,
     outline: "none",
     background: "#FFFFFF",
+    boxShadow: "0 1px 0 rgba(11,31,59,0.02)",
   },
   inputMuted: { background: "#F3F4F6", color: "#6B7280" },
 
@@ -2819,100 +2821,7 @@ const styles = {
   selectorBlock: { display: "grid", gap: 6 },
 
   tableTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" },
-  tableWrap: { overflowX: "hidden", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
-  table: { width: "100%", borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
-
-  th: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 10px", borderBottom: "1px solid #E5E7EB" },
-  td: { padding: "10px 10px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", fontSize: 12 },
-
-  thSmall: { textAlign: "center", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 8px", borderBottom: "1px solid #E5E7EB", width: 46 },
-  thMed: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 8px", borderBottom: "1px solid #E5E7EB", width: 115 },
-  thWide: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 8px", borderBottom: "1px solid #E5E7EB", width: 260 },
-  thTf: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 8px", borderBottom: "1px solid #E5E7EB", width: 120 },
-
-  tdCenter: { padding: "10px 8px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", textAlign: "center" },
-
-  trHeader: { background: "#F9FAFB" },
-  trLate: { background: "#FEF2F2" },
-  trDone: { opacity: 0.75 },
-  trNotRequired: { background: "#F9FAFB", opacity: 0.65 },
-
-  pillCompact: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, border: "1px solid #E5E7EB", fontSize: 12, background: "#FFFFFF", whiteSpace: "nowrap" },
-  pillEmpty: { color: "#9CA3AF", background: "#FAFAFA" },
-  pillLate: { border: "1px solid #EF4444" },
-  pillDone: { border: "1px solid #10B981" },
-  pillMuted: { background: "#F3F4F6", color: "#6B7280" },
-  pillLocked: { background: "#F3F4F6", color: "#111827" },
-
-  wrap: { wordBreak: "break-word", whiteSpace: "normal" },
-
-  milestoneCell: { display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" },
-
-  tfRow: { display: "flex", gap: 6, alignItems: "center" },
-  tfInput: { width: 52, border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, outline: "none", background: "#fff" },
-
-  primaryBtn: { background: TEAL, color: "white", border: `1px solid ${TEAL}`, borderRadius: 14, padding: "10px 12px", fontSize: 12, cursor: "pointer", fontWeight: 900 },
-  secondaryBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 14, padding: "10px 12px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
-  smallBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
-  iconBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer" },
-  unlockBtn: { background: "#FEF2F2", color: "#991B1B", border: "1px solid #FCA5A5", borderRadius: 999, padding: "6px 8px", fontSize: 11, cursor: "pointer", fontWeight: 900 },
-
-  /* --- Modal (comments) --- */
-  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 },
-  modalCard: { width: "min(720px, 100%)", background: "#FFFFFF", borderRadius: 18, border: "1px solid #E5E7EB", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", padding: 16 },
-  modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
-  commentItem: { border: "1px solid #E5E7EB", borderRadius: 14, padding: 12, background: "#FFFFFF" },
-
-  badgeBase: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 900, border: "1px solid transparent", whiteSpace: "nowrap" },
-  badgeOverdue: { background: "#FEF2F2", color: "#991B1B", borderColor: "#FCA5A5" },
-  badgeOngoing: { background: "#FFFBEB", color: "#92400E", borderColor: "#FDE68A" },
-  badgeDone: { background: "#ECFDF5", color: "#065F46", borderColor: "#A7F3D0" },
-
-  filterPill: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 999, padding: "9px 12px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
-  filterPillActive: { background: "#111827", color: "#FFFFFF", borderColor: "#111827" },
-
-  stack: { display: "grid", gap: 6 },
-  inline: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
-
-  keyItem: { display: "inline-flex", gap: 8, alignItems: "center" },
-  keyText: { fontSize: 12, color: "#374151" },
-
-  /* --- Gantt styles --- */
-  ganttWrap: { display: "grid", gap: 8 },
-  ganttHeaderRow: { display: "grid", gridTemplateColumns: "260px 1fr 120px 120px", gap: 10, alignItems: "end" },
-  ganttRow: { display: "grid", gridTemplateColumns: "260px 1fr 120px 120px", gap: 10, alignItems: "center" },
-  ganttHeaderRowDense: { display: "grid", gridTemplateColumns: "260px 1fr 120px 120px", gap: 10, alignItems: "end" },
-  ganttRowDense: { display: "grid", gridTemplateColumns: "260px 1fr 120px 120px", gap: 10, alignItems: "center" },
-  ganttLabelCol: { minWidth: 0 },
-  ganttChartCol: { minWidth: 0 },
-  ganttDateCol: { display: "flex", justifyContent: "flex-start" },
-  ganttAxis: { position: "relative", height: 34, border: "1px solid #E5E7EB", borderRadius: 12, background: "#F9FAFB", overflow: "hidden" },
-  ganttTick: { position: "absolute", top: 0, bottom: 0, transform: "translateX(-0.5px)", pointerEvents: "none" },
-  ganttTickLine: { position: "absolute", top: 0, bottom: 0, width: 1, background: "#E5E7EB" },
-  ganttTickLabel: { position: "absolute", top: 8, left: 6, fontSize: 11, color: "#6B7280", whiteSpace: "nowrap" },
-  ganttLane: { position: "relative", height: 28, border: "1px solid #E5E7EB", borderRadius: 12, background: "#FFFFFF", overflow: "hidden" },
-  ganttBar: { position: "absolute", top: 6, height: 16, borderRadius: 999, background: "#111827" },
-  ganttBarMissing: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#9CA3AF" },
-
-  /* --- Fullscreen programme summary --- */
-  fullscreen: { position: "fixed", inset: 0, background: "#F8FAFC", display: "flex", flexDirection: "column" },
-  fullTopBar: { padding: 12, background: "#FFFFFF", borderBottom: "1px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
-  fullBody: { padding: 12, overflow: "auto", display: "flex", justifyContent: "center" },
-  fullBodyInner: { width: "100%", maxWidth: MAX_W },
-  projectSection: { background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 12, marginBottom: 12, width: "100%", boxShadow: "0 10px 24px rgba(17,24,39,0.06)" },
-  projectHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 },
-  projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
-  projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
-
-  /* --- Boot loading --- */
-  loadingTopBar: {
-    height: 3,
-    width: "100%",
-    background:
-      "linear-gradient(90deg, rgba(16,185,129,0) 0%, rgba(16,185,129,1) 50%, rgba(16,185,129,0) 100%)",
-    backgroundSize: "200% 100%",
-    animation: "azzureLoading 1.1s linear infinite",
-  },
+  tableWrap: { overflowX: "hidden", border: `1px solid ${BRAND_LINE}`, borderRadius: 16, width: "100%", background: "#fff" },
   loadingCard: {
     border: "1px solid #E5E7EB",
     borderRadius: 16,
