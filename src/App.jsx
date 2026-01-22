@@ -1627,7 +1627,13 @@ export default function App() {
               {projects.map((p) => (
                 <div key={p.id} style={styles.projectSection}>
                   <div style={styles.projectHeader}>
-                    <div>
+                    <div style={styles.brandRow}>
+                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                <div>
+                  <h1 style={styles.h1}>SupplySync</h1>
+                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
+                </div>
+              </div>
                       <div style={styles.projectTitle}>{p.name}</div>
                       <div style={styles.muted}>Programme from Block/Zone + Level start/finish dates</div>
                     </div>
