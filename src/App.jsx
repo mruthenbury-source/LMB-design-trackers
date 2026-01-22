@@ -1503,7 +1503,7 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={ display: "flex", alignItems: "center", gap: 16 }>
+              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
                 <div style={styles.brandRow}>
                   <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
                   <div>
