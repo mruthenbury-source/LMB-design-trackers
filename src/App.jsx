@@ -1684,7 +1684,7 @@ export default function App() {
                 <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
                 <div>
                   <h1 style={styles.h1}>Summary</h1>
-                  <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
+                  <p style={styles.sub}>SupplySync_Your Strategic Supply & Delivery Platform.</p>
                 </div>
               </div>
               <div style={styles.headerButtons}>
