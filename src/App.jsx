@@ -1445,9 +1445,9 @@ export default function App() {
         <div style={styles.loadingTopBar} />
         <div style={{ padding: 24, maxWidth: 720, margin: "0 auto" }}>
           <div style={styles.loadingCard}>
-            <div style={styles.loadingTitle}>Loading latest tracker data…</div>
+            <div style={styles.loadingTitle}>Loading…</div>
             <div style={styles.loadingSub}>
-              Fetching the most recent state from Azure Blob.
+              Fetching latest data from SupplySync.
             </div>
             {hydrateError ? (
               <div style={{ marginTop: 10, fontSize: 12, color: "#B91C1C" }}>{hydrateError}</div>
@@ -1504,7 +1504,7 @@ export default function App() {
           <div style={styles.page}>
             <div style={styles.header}>
               <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
                 <div>
                   <h1 style={styles.h1}>SupplySync</h1>
                   <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
@@ -1681,7 +1681,7 @@ export default function App() {
           <div style={styles.page}>
             <div style={styles.header}>
               <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
                 <div>
                   <h1 style={styles.h1}>Summary</h1>
                   <p style={styles.sub}>SupplySync_Your Strategic Supply & Delivery Platform.</p>
@@ -2120,7 +2120,7 @@ function tickMilestone(row, field, checked) {
     <div style={styles.page}>
       <div style={styles.header}>
         <div style={styles.brandRow}>
-          <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+          <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
           <div>
             <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
             <p style={styles.sub}>SupplySync_Your Strategic Supply & Delivery Platform.</p>
