@@ -2122,8 +2122,10 @@ function tickMilestone(row, field, checked) {
         <div style={styles.brandRow}>
           <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
           <div>
+                  <h1 style={styles.h1}>SupplySync</h1>
+                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
+                </div>
             <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
-            <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
           </div>
         </div>
         <div style={styles.headerButtons}>
