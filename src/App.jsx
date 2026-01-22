@@ -1503,16 +1503,17 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={{ display: "flex", flexDirection: "column" }}>
+              <div style={ display: "flex", alignItems: "center", gap: 16 }>
                 <div style={styles.brandRow}>
                   <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                  <h1 style={{ ...styles.h1, margin: 0 }}>SupplySync</h1>
+                  <div>
+                    <h1 style={styles.h1}>SupplySync</h1>
+                    <p style={styles.sub}>Your Strategic Supply &amp; Delivery Platform</p>
+                  </div>
                 </div>
-                <p style={{ ...styles.sub, margin: 0 }}>Your Strategic Supply & Delivery Platform</p>
+                <div style={styles.vDivider} />
+                <div style={styles.projectTitleRight}>"Home"</div>
               </div>
-
-              <div style={styles.vDivider} />
-
               <div style={styles.headerButtons}>{saveButton}</div>
             </div>
 
@@ -1608,21 +1609,9 @@ export default function App() {
       <>
         <div style={styles.fullscreen}>
           <div style={styles.fullTopBar}>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <div style={styles.brandRow}>
-                  <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                  <div style={{ fontWeight: 900, fontSize: 16, lineHeight: 1.1 }}>SupplySync</div>
-                </div>
-                <div style={styles.muted}>Your Strategic Supply &amp; Delivery Platform</div>
-              </div>
-
-              <div style={styles.vDivider} />
-
-              <div>
-                <div style={{ fontWeight: 900, fontSize: 16 }}>Programme Summary</div>
-                <div style={styles.muted}>All projects, stacked. Print will output this page only.</div>
-              </div>
+            <div>
+              <div style={{ fontWeight: 900, fontSize: 16 }}>Programme Summary</div>
+              <div style={styles.muted}>All projects, stacked. Print will output this page only.</div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
@@ -1695,19 +1684,18 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={{ display: "flex", flexDirection: "column" }}>
+              <div style={ display: "flex", alignItems: "center", gap: 16 }>
                 <div style={styles.brandRow}>
                   <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                  <h1 style={{ ...styles.h1, margin: 0 }}>SupplySync</h1>
+                  <div>
+                    <h1 style={styles.h1}>SupplySync</h1>
+                    <p style={styles.sub}>Your Strategic Supply &amp; Delivery Platform</p>
+                  </div>
                 </div>
-                <p style={{ ...styles.sub, margin: 0 }}>Your Strategic Supply &amp; Delivery Platform</p>
+                <div style={styles.vDivider} />
+                <div style={styles.projectTitleRight}>"Summary"</div>
               </div>
-
-              <div style={styles.vDivider} />
-
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <div style={styles.projectTitleRight}>Summary</div>
-                <div style={styles.headerButtons}>
+              <div style={styles.headerButtons}>
                 {saveButton}
                 <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                   Home
@@ -1721,7 +1709,6 @@ export default function App() {
                 <button style={styles.secondaryBtn} onClick={exportSummaryPDF}>
                   Export PDF
                 </button>
-              </div>
               </div>
             </div>
 
@@ -2140,20 +2127,19 @@ function tickMilestone(row, field, checked) {
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={styles.brandRow}>
-            <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-            <h1 style={{ ...styles.h1, margin: 0 }}>SupplySync</h1>
-          </div>
-          <p style={{ ...styles.sub, margin: 0 }}>Your Strategic Supply &amp; Delivery Platform</p>
-        </div>
-
-        <div style={styles.vDivider} />
-
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto" }}>
-          <div style={styles.projectTitleRight}>{activeProject?.name || "Project"}</div>
-          <div style={styles.headerButtons}>
-            {saveButton}
+        <div style={ display: "flex", alignItems: "center", gap: 16 }>
+                <div style={styles.brandRow}>
+                  <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                  <div>
+                    <h1 style={styles.h1}>SupplySync</h1>
+                    <p style={styles.sub}>Your Strategic Supply &amp; Delivery Platform</p>
+                  </div>
+                </div>
+                <div style={styles.vDivider} />
+                <div style={styles.projectTitleRight}>{activeProject?.name || ""}</div>
+              </div>
+              <div style={styles.headerButtons}>
+                {saveButton}
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
@@ -2169,7 +2155,6 @@ function tickMilestone(row, field, checked) {
           ) : (
             <div style={styles.muted}>Guest access</div>
           )}
-          </div>
         </div>
       </div>
 
@@ -2791,13 +2776,11 @@ const styles = {
     justifyContent: "space-between",
     gap: 12,
     marginBottom: 12,
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     width: "100%",
     maxWidth: MAX_W,
   },
   headerButtons: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
-  vDivider: { width: 1, alignSelf: "stretch", background: "rgba(17,24,39,0.10)" },
-  projectTitleRight: { fontWeight: 900, fontSize: 20, lineHeight: 1.1, whiteSpace: "nowrap" },
   brandRow: { display: "flex", gap: 12, alignItems: "center" },
   brandLogo: { width: 44, height: 44, objectFit: "contain" },
 
