@@ -1503,9 +1503,12 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div>
-                <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
-                <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
+              <div style={styles.brandRow}>
+                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                <div>
+                  <h1 style={styles.h1}>SupplySync</h1>
+                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
+                </div>
               </div>
               <div style={styles.headerButtons}>{saveButton}</div>
             </div>
@@ -1677,9 +1680,12 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div>
-                <h1 style={styles.h1}>Summary</h1>
-                <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
+              <div style={styles.brandRow}>
+                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                <div>
+                  <h1 style={styles.h1}>Summary</h1>
+                  <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
+                </div>
               </div>
               <div style={styles.headerButtons}>
                 {saveButton}
@@ -2113,9 +2119,12 @@ function tickMilestone(row, field, checked) {
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <div>
-          <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
-          <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
+        <div style={styles.brandRow}>
+          <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+          <div>
+            <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
+            <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
+          </div>
         </div>
         <div style={styles.headerButtons}>
                 {saveButton}
@@ -2760,6 +2769,9 @@ const styles = {
     maxWidth: MAX_W,
   },
   headerButtons: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  brandRow: { display: "flex", gap: 12, alignItems: "center" },
+  brandLogo: { width: 44, height: 44, objectFit: "contain" },
+
   savePill: { padding: "8px 12px", borderRadius: 12, border: "1px solid #E5E7EB", fontWeight: 900, fontSize: 12, cursor: "pointer" },
   h1: { fontSize: 22, margin: 0, lineHeight: 1.2, fontWeight: 900 },
   h2: { fontSize: 15, margin: 0, lineHeight: 1.2, fontWeight: 900 },
