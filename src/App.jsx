@@ -2148,7 +2148,6 @@ function tickMilestone(row, field, checked) {
         </div>
       </div>
 
-      {/* ✅ always left aligned, and ✅ NO "+ Project" here */}
       <div style={styles.card}>
         <SelectorBar />
         <div style={{ marginTop: 10 }}>
