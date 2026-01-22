@@ -1503,12 +1503,16 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                <div>
-                  <h1 style={styles.h1}>SupplySync</h1>
-                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
+              <div style={ display: "flex", alignItems: "center", gap: 16 }>
+                <div style={styles.brandRow}>
+                  <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                  <div>
+                    <h1 style={styles.h1}>SupplySync</h1>
+                    <p style={styles.sub}>Your Strategic Supply &amp; Delivery Platform</p>
+                  </div>
                 </div>
+                <div style={styles.vDivider} />
+                <div style={styles.projectTitleRight}>"Home"</div>
               </div>
               <div style={styles.headerButtons}>{saveButton}</div>
             </div>
@@ -1627,13 +1631,7 @@ export default function App() {
               {projects.map((p) => (
                 <div key={p.id} style={styles.projectSection}>
                   <div style={styles.projectHeader}>
-                    <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                <div>
-                  <h1 style={styles.h1}>SupplySync</h1>
-                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
-                </div>
-              </div>
+                    <div>
                       <div style={styles.projectTitle}>{p.name}</div>
                       <div style={styles.muted}>Programme from Block/Zone + Level start/finish dates</div>
                     </div>
@@ -1686,12 +1684,16 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                <div>
-                  <h1 style={styles.h1}>Summary</h1>
-                  <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
+              <div style={ display: "flex", alignItems: "center", gap: 16 }>
+                <div style={styles.brandRow}>
+                  <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                  <div>
+                    <h1 style={styles.h1}>SupplySync</h1>
+                    <p style={styles.sub}>Your Strategic Supply &amp; Delivery Platform</p>
+                  </div>
                 </div>
+                <div style={styles.vDivider} />
+                <div style={styles.projectTitleRight}>"Summary"</div>
               </div>
               <div style={styles.headerButtons}>
                 {saveButton}
@@ -2125,13 +2127,18 @@ function tickMilestone(row, field, checked) {
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <div style={styles.brandRow}>
-          <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-          <div>
-            <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
-          </div>
-        </div>
-        <div style={styles.headerButtons}>
+        <div style={ display: "flex", alignItems: "center", gap: 16 }>
+                <div style={styles.brandRow}>
+                  <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                  <div>
+                    <h1 style={styles.h1}>SupplySync</h1>
+                    <p style={styles.sub}>Your Strategic Supply &amp; Delivery Platform</p>
+                  </div>
+                </div>
+                <div style={styles.vDivider} />
+                <div style={styles.projectTitleRight}>{activeProject?.name || ""}</div>
+              </div>
+              <div style={styles.headerButtons}>
                 {saveButton}
           {isAdmin ? (
             <>
@@ -2769,7 +2776,7 @@ const styles = {
     justifyContent: "space-between",
     gap: 12,
     marginBottom: 12,
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     width: "100%",
     maxWidth: MAX_W,
   },
