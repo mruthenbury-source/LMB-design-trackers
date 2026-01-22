@@ -1447,7 +1447,7 @@ export default function App() {
           <div style={styles.loadingCard}>
             <div style={styles.loadingTitle}>Loading latest tracker data…</div>
             <div style={styles.loadingSub}>
-              Fetching the most recent state from Azure Blob.
+              Syncing with latest data.
             </div>
             {hydrateError ? (
               <div style={{ marginTop: 10, fontSize: 12, color: "#B91C1C" }}>{hydrateError}</div>
