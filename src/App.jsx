@@ -1506,7 +1506,7 @@ export default function App() {
               <div style={styles.brandRow}>
                 <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
                 <div>
-                  <h1 style={styles.h1}>SupplySync</h1>
+                  <h1 style={styles.h1}>LMB_SupplySync</h1>
                   <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
                 </div>
               </div>
