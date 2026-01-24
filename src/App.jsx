@@ -1299,25 +1299,9 @@ export default function App() {
     w.document.close();
   }
 
- /* ------------ build chat context ------------ */
+/* ------------ build chat context ------------ */
 
 const YESNO = (b) => (b ? "YES" : "NO");
-
-// If you already have parseISO in your file, REMOVE this and use yours.
-const parseISO = (s) => {
-  if (!s) return null;
-  const [y, m, d] = String(s).split("-").map(Number);
-  if (!y || !m || !d) return null;
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  return Number.isNaN(dt.getTime()) ? null : dt;
-};
-
-const diffDays = (startISO, endISO) => {
-  const s = parseISO(startISO);
-  const e = parseISO(endISO);
-  if (!s || !e) return null;
-  return Math.round((e.getTime() - s.getTime()) / 86400000);
-};
 
 const chatContext = useMemo(() => {
   const overdue = summaryItems.filter((x) => x.status === "overdue").slice(0, 30);
@@ -1349,7 +1333,7 @@ const chatContext = useMemo(() => {
         startDate: lv.startDate || "",
         finishDate: lv.finishDate || "",
         durationDays:
-          lv.startDate && lv.finishDate ? diffDays(lv.startDate, lv.finishDate) : null,
+          lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
       }))
     )
   );
@@ -1381,7 +1365,6 @@ const chatContext = useMemo(() => {
         requiredOnSite: x.requiredOnSite,
         statusA: x.statusA,
         traffic: x.traffic,
-        // include tickboxes in samples too (helps quick answers)
         ticks: {
           statusA: YESNO(!!x.statusADone),
           firstIssue: YESNO(!!x.firstIssueDone),
@@ -1407,39 +1390,30 @@ const chatContext = useMemo(() => {
     },
 
     bySupplier,
-
-    // ✅ Programme searchable index (master levels)
     programme,
 
-    // ✅ Full searchable tracker index for the assistant
     rows: summaryItems.map((x) => ({
       project: x.projectName,
       responsibility: x.pageName,
       supplier: x.supplier || "—",
       item: x.title,
 
-      // key dates
       requiredOnSite: x.requiredOnSite,
       statusA: x.statusA,
       firstIssue: x.firstIssue,
 
-      // durations / timeframe
       timeframe: x.timeframe,
       daysReqToStatusA: x.daysReqToStatusA,
       daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
       totalDurationDays: x.totalDurationDays,
 
-      // ✅ ALL tick boxes (explicit)
       ticks: {
         statusA: YESNO(!!x.statusADone),
         firstIssue: YESNO(!!x.firstIssueDone),
         completed: YESNO(!!x.completed),
         notRequired: YESNO(!!x.notRequired),
-        // optional: only if your summaryItems includes it
-        locked: YESNO(!!x.locked),
       },
 
-      // comments
       comments: x.commentsText || "",
       commentsCount: x.commentsCount || 0,
 
@@ -1448,6 +1422,7 @@ const chatContext = useMemo(() => {
     })),
   };
 }, [summaryItems, view, activeProject, activePage, projects]);
+
 
 async function sendChat() {
   const text = chatInput.trim();
