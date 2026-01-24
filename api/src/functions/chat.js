@@ -1,66 +1,206 @@
 import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
 
-function getContainer() {
-  const conn =
-    process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
+/* ---------------- blob helpers ---------------- */
+
+function getBlobClients() {
+  const conn = process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
   const containerName = process.env.STATE_CONTAINER || "workback";
-  if (!conn) throw new Error("Storage connection string not set");
-  return BlobServiceClient.fromConnectionString(conn).getContainerClient(
-    containerName
-  );
+
+  if (!conn) throw new Error("Storage connection string is not set (BLOB_CONNECTION_STRING or AzureWebJobsStorage)");
+
+  const service = BlobServiceClient.fromConnectionString(conn);
+  const container = service.getContainerClient(containerName);
+  return { container };
 }
 
 async function streamToString(readable) {
   return await new Promise((resolve, reject) => {
     const chunks = [];
     readable.on("data", (d) => chunks.push(d));
-    readable.on("end", () =>
-      resolve(Buffer.concat(chunks).toString("utf8"))
-    );
+    readable.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     readable.on("error", reject);
   });
 }
 
-async function loadWeeklyBackups(limit = 3) {
-  const container = getContainer();
-  const prefix = process.env.BACKUP_PREFIX || "backups/";
-  const found = [];
+function extractBackupDateFromName(name) {
+  // backups/state-YYYY-MM-DD.json
+  const m = String(name || "").match(/state-(\d{4}-\d{2}-\d{2})\.json$/);
+  return m ? m[1] : null;
+}
 
-  for await (const blob of container.listBlobsFlat({ prefix })) {
-    found.push({
-      name: blob.name,
-      lastModified: blob.properties?.lastModified,
-    });
-  }
+function safeStr(v) {
+  return (v ?? "").toString().trim();
+}
 
-  found.sort(
-    (a, b) => new Date(b.lastModified) - new Date(a.lastModified)
+function isoToUtcDate(s) {
+  if (!s) return null;
+  const parts = String(s).split("-").map(Number);
+  if (parts.length !== 3) return null;
+  const [y, m, d] = parts;
+  if (!y || !m || !d) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function diffDaysUTC(aISO, bISO) {
+  const a = isoToUtcDate(aISO);
+  const b = isoToUtcDate(bISO);
+  if (!a || !b) return null;
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+/* ---------------- index builders ---------------- */
+
+// Builds a minimal “chat-like context” from a saved state.json payload.
+function buildIndexFromState(state) {
+  const projects = Array.isArray(state?.projects) ? state.projects : [];
+
+  // programme: master levels start/finish/duration
+  const programme = projects.flatMap((p) =>
+    (p.master || []).flatMap((m) =>
+      (m.levels || []).map((lv) => ({
+        project: safeStr(p.name),
+        blockZone: safeStr(m.blockZone),
+        level: safeStr(lv.name),
+        startDate: safeStr(lv.startDate),
+        finishDate: safeStr(lv.finishDate),
+        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
+      }))
+    )
   );
 
-  const picked = found.slice(0, limit);
-  const backups = [];
+  // rows: tracker rows (exclude headers + notRequired like your summaryItems)
+  const rows = [];
+  projects.forEach((p) => {
+    const responsibilities = Array.isArray(p.responsibilities) ? p.responsibilities : [];
+    const pages = Array.isArray(p.pages) ? p.pages : [];
 
-  for (const b of picked) {
-    const bb = container.getBlockBlobClient(b.name);
-    const dl = await bb.download();
-    const text = await streamToString(dl.readableStreamBody);
-    backups.push({
-      date: b.lastModified,
-      state: text ? JSON.parse(text) : null,
-    });
-  }
+    const supplierByRespId = new Map(responsibilities.map((r) => [r.id, safeStr(r.supplier)]));
 
-  return backups;
+    pages
+      .filter((pg) => !pg?.meta?.isMaster)
+      .forEach((pg) => {
+        (pg.rows || [])
+          .filter((r) => r && r.kind !== "header")
+          .filter((r) => !r.notRequired)
+          .forEach((r) => {
+            // These are “raw” row fields; your UI computes derived dates elsewhere,
+            // so we store what the state likely has + ticks + comments.
+            const comments = Array.isArray(r.comments) ? r.comments : [];
+            const commentsText = comments
+              .map((c) => [safeStr(c?.dateISO), safeStr(c?.name || c?.lockedBy), safeStr(c?.text)].filter(Boolean).join(" — "))
+              .filter(Boolean)
+              .join("\n");
+
+            const supplier = supplierByRespId.get(pg?.meta?.responsibilityId) || "";
+
+            // Create a best-effort key. Ideally you add IDs in chatContext later,
+            // but this works well enough for comparisons.
+            const key = [safeStr(p.name), safeStr(pg.name), safeStr(supplier), safeStr(r.item)].join(" | ");
+
+            rows.push({
+              key,
+              project: safeStr(p.name),
+              responsibility: safeStr(pg.name),
+              supplier: supplier || "—",
+              item: safeStr(r.item),
+
+              // Best effort date fields (if your state stores computed dates, include them)
+              requiredOnSite: safeStr(r.requiredOnSite || r.requiredOnSiteISO),
+              statusA: safeStr(r.statusA || r.statusAISO),
+              firstIssue: safeStr(r.firstIssue || r.firstIssueISO),
+
+              // If you store these in state (many builds do)
+              timeframe: safeStr(r.timeframe),
+              daysReqToStatusA: r.overrideDaysReqToStatusA ?? null,
+              daysStatusAToFirstIssue: r.overrideDaysStatusAToFirstIssue ?? null,
+
+              // ticks
+              ticks: {
+                statusA: !!r.statusADone,
+                firstIssue: !!r.firstIssueDone,
+                completed: !!r.completed,
+                notRequired: !!r.notRequired,
+              },
+
+              comments: commentsText,
+              commentsCount: comments.length,
+            });
+          });
+      });
+  });
+
+  return { programme, rows };
 }
+
+// Diff current vs backup (tick + date changes)
+function diffCurrentVsBackup(currentCtx, backupIndex) {
+  const currentRows = Array.isArray(currentCtx?.rows) ? currentCtx.rows : [];
+  const backupRows = Array.isArray(backupIndex?.rows) ? backupIndex.rows : [];
+
+  const curMap = new Map();
+  currentRows.forEach((r) => {
+    const key =
+      safeStr(r.key) ||
+      [safeStr(r.project), safeStr(r.responsibility), safeStr(r.supplier), safeStr(r.item)].join(" | ");
+    curMap.set(key, r);
+  });
+
+  const changes = [];
+  backupRows.forEach((b) => {
+    const key = safeStr(b.key) || [safeStr(b.project), safeStr(b.responsibility), safeStr(b.supplier), safeStr(b.item)].join(" | ");
+    const c = curMap.get(key);
+    if (!c) return;
+
+    const tickChanges = [];
+    const ct = c.ticks || {};
+    const bt = b.ticks || {};
+
+    ["statusA", "firstIssue", "completed", "notRequired"].forEach((k) => {
+      const cv = !!ct[k];
+      const bv = !!bt[k];
+      if (cv !== bv) tickChanges.push({ tick: k, from: bv, to: cv });
+    });
+
+    const dateChanges = [];
+    ["requiredOnSite", "statusA", "firstIssue", "timeframe"].forEach((k) => {
+      const cv = safeStr(c[k]);
+      const bv = safeStr(b[k]);
+      if (cv !== bv && (cv || bv)) dateChanges.push({ field: k, from: bv || null, to: cv || null });
+    });
+
+    if (tickChanges.length || dateChanges.length) {
+      changes.push({
+        key,
+        project: safeStr(c.project),
+        responsibility: safeStr(c.responsibility),
+        supplier: safeStr(c.supplier),
+        item: safeStr(c.item),
+        tickChanges,
+        dateChanges,
+      });
+    }
+  });
+
+  // Keep payload small
+  return {
+    changedCount: changes.length,
+    changedSample: changes.slice(0, 120),
+  };
+}
+
+/* ---------------- chat function ---------------- */
 
 app.http("chat", {
   methods: ["POST"],
   authLevel: "anonymous",
   handler: async (req) => {
     try {
-      const { messages, context: appContext, searchBackups } =
-        await req.json();
+      const body = await req.json().catch(() => ({}));
+      const messages = body?.messages;
+      const appContext = body?.context;
+      const searchBackups = !!body?.searchBackups;
 
       const apiKey = process.env.OPENAI_API_KEY;
       const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
@@ -68,45 +208,84 @@ app.http("chat", {
       if (!apiKey) {
         return {
           status: 500,
-          jsonBody: { error: "OPENAI_API_KEY is not set" },
+          jsonBody: {
+            error:
+              "OPENAI_API_KEY is not set. Add it in Azure Static Web Apps > Configuration > Application settings.",
+          },
         };
       }
 
-      let backups = [];
+      // Optional: load + index backups (only when user ticks "search backups")
+      const backupsPayload = { enabled: searchBackups, count: 0, snapshots: [], comparisons: [] };
+
       if (searchBackups) {
-        try {
-          backups = await loadWeeklyBackups(3);
-        } catch {
-          backups = [];
+        const prefix = process.env.BACKUP_PREFIX || "backups/";
+        const maxBackups = Number(process.env.BACKUP_CHAT_LIMIT || 6);
+
+        const { container } = getBlobClients();
+        await container.createIfNotExists();
+
+        const found = [];
+        for await (const blob of container.listBlobsFlat({ prefix })) {
+          const date = extractBackupDateFromName(blob.name);
+          if (!date) continue;
+          found.push({ name: blob.name, date });
         }
+
+        found.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+        const selected = found.slice(0, Math.max(0, maxBackups));
+        const snapshots = [];
+
+        for (const b of selected) {
+          try {
+            const client = container.getBlobClient(b.name);
+            const dl = await client.download();
+            const text = await streamToString(dl.readableStreamBody);
+            const state = text ? JSON.parse(text) : null;
+
+            const index = buildIndexFromState(state || {});
+            snapshots.push({
+              date: b.date,
+              blobName: b.name,
+              programme: index.programme,
+              rows: index.rows,
+            });
+          } catch {
+            // ignore bad blobs
+          }
+        }
+
+        backupsPayload.count = snapshots.length;
+        backupsPayload.snapshots = snapshots.map((s) => ({
+          date: s.date,
+          blobName: s.blobName,
+          // keep the data, but you can trim if needed
+          programme: s.programme,
+          rows: s.rows,
+        }));
+
+        // Precompute diffs current vs each backup (helps model answer comparisons fast)
+        backupsPayload.comparisons = snapshots.map((s) => ({
+          date: s.date,
+          blobName: s.blobName,
+          diff: diffCurrentVsBackup(appContext || {}, s),
+        }));
       }
 
-      const mergedContext = {
-        ...appContext,
-        backupsEnabled: !!searchBackups,
-        backups,
-      };
-
       const systemText =
-        "You are a helpful assistant for a design programme tracker web app called SupplySync.\n" +
-        "Use APP_CONTEXT_JSON to answer questions.\n" +
-        "Important rules:\n" +
-        "- Tick boxes are explicit booleans (statusADone, firstIssueDone, completed, notRequired).\n" +
-        "- Dates may include requiredOnSite, statusA, firstIssue, programme start/finish.\n" +
-        "- Durations may be provided in days or derived from dates.\n" +
-        "- If backupsEnabled=true, compare current state with backups when asked about history.\n" +
-        "- If something is missing, say what is required.";
+        "You are a helpful assistant for the SupplySync design programme tracker app. " +
+        "Use APP_CONTEXT_JSON (current data) to answer questions accurately. " +
+        "If BACKUPS_JSON is present, you can compare current vs historic snapshots. " +
+        "When asked to compare, call out the backup date(s) explicitly and summarize differences clearly. " +
+        "Tick boxes are in rows[].ticks (YES/NO style). If user asks 'is Status A ticked?', check ticks.statusA.";
 
       const input = [
         { role: "system", content: systemText },
-        {
-          role: "system",
-          content: `APP_CONTEXT_JSON:\n${JSON.stringify(
-            mergedContext,
-            null,
-            2
-          )}`,
-        },
+        { role: "system", content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}` },
+        ...(searchBackups
+          ? [{ role: "system", content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {}, null, 2)}` }]
+          : []),
         ...(Array.isArray(messages) ? messages : []),
       ];
 
@@ -129,7 +308,11 @@ app.http("chat", {
       if (!r.ok) {
         return {
           status: 500,
-          jsonBody: { error: "OpenAI request failed", details: data },
+          jsonBody: {
+            error: "OpenAI request failed",
+            status: r.status,
+            details: data,
+          },
         };
       }
 
@@ -138,7 +321,10 @@ app.http("chat", {
         data?.output?.[0]?.content?.[0]?.text ||
         "No response text returned.";
 
-      return { status: 200, jsonBody: { answer } };
+      return {
+        status: 200,
+        jsonBody: { answer },
+      };
     } catch (e) {
       return {
         status: 500,
@@ -147,3 +333,4 @@ app.http("chat", {
     }
   },
 });
+
