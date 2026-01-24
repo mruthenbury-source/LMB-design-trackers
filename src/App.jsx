@@ -1139,29 +1139,30 @@ export default function App() {
   pageId: pg.id,
   pageName: pg.name,
   rowId: r.id,
-  title: r.item,
-  supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "",
-  requiredOnSite: dates.requiredOnSite,
-  statusA: dates.statusA,
-  firstIssue: dates.firstIssue,
-  anchorKey: r.anchorKey,
-  anchorDateISO: r.anchorDateISO,
-  daysReqToStatusA: d1,
-  daysStatusAToFirstIssue: d2,
-  totalDurationDays,
-  timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
-  commentsText,
-  commentsCount: comments.length,
+  title: r.item || "Unknown",  // Safeguard for missing item/title
+  supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
+  requiredOnSite: dates.requiredOnSite || "N/A",  // Default if not available
+  statusA: dates.statusA || "N/A",  // Default if not available
+  firstIssue: dates.firstIssue || "N/A",  // Default if not available
+  anchorKey: r.anchorKey || "N/A",  // Safeguard
+  anchorDateISO: r.anchorDateISO || "N/A",  // Safeguard
+  daysReqToStatusA: d1 || 0,  // Default to 0 if undefined
+  daysStatusAToFirstIssue: d2 || 0,  // Default to 0 if undefined
+  totalDurationDays: totalDurationDays || 0,  // Default to 0 if undefined
+  timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "N/A",
+  commentsText: commentsText || "No comments",  // Safeguard for empty comments
+  commentsCount: comments.length || 0,  // Default to 0 if no comments
 
   // ✅ tickboxes (for chat search)
-  completed: !!r.completed,
-  notRequired: !!r.notRequired,        // will always be false here due to filter, but harmless
-  statusADone: !!r.statusADone,
-  firstIssueDone: !!r.firstIssueDone,
+  completed: !!r.completed,  // Ensure it's a boolean (if it's missing, it'll be false)
+  notRequired: !!r.notRequired, // Will always be false if missing
+  statusADone: !!r.statusADone,  // Ensure it's a boolean
+  firstIssueDone: !!r.firstIssueDone,  // Ensure it's a boolean
 
   status,
   traffic,
 });
+
 
 
     const rank = { overdue: 0, ongoing: 1, done: 2 };
