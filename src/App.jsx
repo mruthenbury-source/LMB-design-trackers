@@ -1133,32 +1133,36 @@ export default function App() {
 
               const totalDurationDays = diffDaysUTC(dates.firstIssue, dates.requiredOnSite);
 
-              out.push({
-                projectId: proj.id,
-                projectName: proj.name,
-                pageId: pg.id,
-                pageName: pg.name,
-                rowId: r.id,
-                title: r.item,
-                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "",
-                requiredOnSite: dates.requiredOnSite,
-                statusA: dates.statusA,
-                firstIssue: dates.firstIssue,
-                anchorKey: r.anchorKey,
-                anchorDateISO: r.anchorDateISO,
-                daysReqToStatusA: d1,
-                daysStatusAToFirstIssue: d2,
-                totalDurationDays,
-                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
-                commentsText,
-                commentsCount: comments.length,
-                completed: !!r.completed,
-                status,
-                traffic,
-              });
-            });
-        });
-    });
+      out.push({
+  projectId: proj.id,
+  projectName: proj.name,
+  pageId: pg.id,
+  pageName: pg.name,
+  rowId: r.id,
+  title: r.item,
+  supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "",
+  requiredOnSite: dates.requiredOnSite,
+  statusA: dates.statusA,
+  firstIssue: dates.firstIssue,
+  anchorKey: r.anchorKey,
+  anchorDateISO: r.anchorDateISO,
+  daysReqToStatusA: d1,
+  daysStatusAToFirstIssue: d2,
+  totalDurationDays,
+  timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
+  commentsText,
+  commentsCount: comments.length,
+
+  // ✅ tickboxes (for chat search)
+  completed: !!r.completed,
+  notRequired: !!r.notRequired,        // will always be false here due to filter, but harmless
+  statusADone: !!r.statusADone,
+  firstIssueDone: !!r.firstIssueDone,
+
+  status,
+  traffic,
+});
+
 
     const rank = { overdue: 0, ongoing: 1, done: 2 };
     out.sort((a, b) => {
@@ -1295,114 +1299,204 @@ export default function App() {
     w.document.close();
   }
 
-  /* ------------ build chat context ------------ */
-  const chatContext = useMemo(() => {
-    const overdue = summaryItems.filter((x) => x.status === "overdue").slice(0, 30);
-    const dueSoon = summaryItems
-      .filter((x) => x.status !== "done" && x.statusA)
-      .slice()
-      .sort((a, b) => (parseISO(a.statusA)?.getTime() ?? 9e15) - (parseISO(b.statusA)?.getTime() ?? 9e15))
-      .slice(0, 30);
+ /* ------------ build chat context ------------ */
 
-    const bySupplier = {};
-    summaryItems.forEach((x) => {
-      const key = x.supplier || "—";
-      bySupplier[key] = bySupplier[key] || { overdue: 0, ongoing: 0, done: 0, total: 0 };
-      bySupplier[key].total += 1;
-      bySupplier[key][x.status] += 1;
-    });
+const YESNO = (b) => (b ? "YES" : "NO");
 
-    return {
-      today: isoToday(),
-      view,
-      activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
-      activePage: activePage ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster } : null,
-      counts: {
-        projects: projects.length,
-        summaryItems: summaryItems.length,
-        overdue: summaryItems.filter((x) => x.status === "overdue").length,
-        ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
-        done: summaryItems.filter((x) => x.status === "done").length,
-      },
-      sample: {
-        overdueTop: overdue.map((x) => ({
-          project: x.projectName,
-          responsibility: x.pageName,
-          supplier: x.supplier || "—",
-          item: x.title,
-          requiredOnSite: x.requiredOnSite,
-          statusA: x.statusA,
-          traffic: x.traffic,
-        })),
-        upcomingStatusA: dueSoon.map((x) => ({
-          project: x.projectName,
-          responsibility: x.pageName,
-          supplier: x.supplier || "—",
-          item: x.title,
-          statusA: x.statusA,
-          traffic: x.traffic,
-        })),
-      },
-      bySupplier,
+// If you already have parseISO in your file, REMOVE this and use yours.
+const parseISO = (s) => {
+  if (!s) return null;
+  const [y, m, d] = String(s).split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return Number.isNaN(dt.getTime()) ? null : dt;
+};
 
-      // Full searchable index for the assistant (includes dates, durations, timeframe and comments)
-      rows: summaryItems.map((x) => ({
+const diffDays = (startISO, endISO) => {
+  const s = parseISO(startISO);
+  const e = parseISO(endISO);
+  if (!s || !e) return null;
+  return Math.round((e.getTime() - s.getTime()) / 86400000);
+};
+
+const chatContext = useMemo(() => {
+  const overdue = summaryItems.filter((x) => x.status === "overdue").slice(0, 30);
+
+  const dueSoon = summaryItems
+    .filter((x) => x.status !== "done" && x.statusA)
+    .slice()
+    .sort(
+      (a, b) =>
+        (parseISO(a.statusA)?.getTime() ?? 9e15) - (parseISO(b.statusA)?.getTime() ?? 9e15)
+    )
+    .slice(0, 30);
+
+  const bySupplier = {};
+  summaryItems.forEach((x) => {
+    const key = x.supplier || "—";
+    bySupplier[key] = bySupplier[key] || { overdue: 0, ongoing: 0, done: 0, total: 0 };
+    bySupplier[key].total += 1;
+    bySupplier[key][x.status] += 1;
+  });
+
+  // Programme index (master) so chat can answer start/finish/duration questions
+  const programme = (projects || []).flatMap((p) =>
+    (p.master || []).flatMap((m) =>
+      (m.levels || []).map((lv) => ({
+        project: p.name || "",
+        blockZone: m.blockZone || "",
+        level: lv.name || "",
+        startDate: lv.startDate || "",
+        finishDate: lv.finishDate || "",
+        durationDays:
+          lv.startDate && lv.finishDate ? diffDays(lv.startDate, lv.finishDate) : null,
+      }))
+    )
+  );
+
+  return {
+    app: "SupplySync",
+    today: isoToday(),
+    view,
+
+    activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
+    activePage: activePage
+      ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster }
+      : null,
+
+    counts: {
+      projects: projects.length,
+      summaryItems: summaryItems.length,
+      overdue: summaryItems.filter((x) => x.status === "overdue").length,
+      ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
+      done: summaryItems.filter((x) => x.status === "done").length,
+    },
+
+    sample: {
+      overdueTop: overdue.map((x) => ({
         project: x.projectName,
         responsibility: x.pageName,
         supplier: x.supplier || "—",
         item: x.title,
         requiredOnSite: x.requiredOnSite,
         statusA: x.statusA,
-        firstIssue: x.firstIssue,
-        timeframe: x.timeframe,
-        daysReqToStatusA: x.daysReqToStatusA,
-        daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
-        totalDurationDays: x.totalDurationDays,
-        comments: x.commentsText || "",
-        commentsCount: x.commentsCount || 0,
-        status: x.status,
         traffic: x.traffic,
+        // include tickboxes in samples too (helps quick answers)
+        ticks: {
+          statusA: YESNO(!!x.statusADone),
+          firstIssue: YESNO(!!x.firstIssueDone),
+          completed: YESNO(!!x.completed),
+          notRequired: YESNO(!!x.notRequired),
+        },
       })),
-    };
-  }, [summaryItems, view, activeProject, activePage, projects]);
 
-  async function sendChat() {
-    const text = chatInput.trim();
-    if (!text || chatBusy) return;
+      upcomingStatusA: dueSoon.map((x) => ({
+        project: x.projectName,
+        responsibility: x.pageName,
+        supplier: x.supplier || "—",
+        item: x.title,
+        statusA: x.statusA,
+        traffic: x.traffic,
+        ticks: {
+          statusA: YESNO(!!x.statusADone),
+          firstIssue: YESNO(!!x.firstIssueDone),
+          completed: YESNO(!!x.completed),
+          notRequired: YESNO(!!x.notRequired),
+        },
+      })),
+    },
 
-    const next = [...chatMessages, { role: "user", content: text }];
-    setChatMessages(next);
-    setChatInput("");
-    setChatBusy(true);
-    setChatStatus("checking");
+    bySupplier,
 
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, context: chatContext, searchBackups: !!chatSearchBackups }),
-      });
+    // ✅ Programme searchable index (master levels)
+    programme,
 
-      if (!res.ok) {
-        setChatStatus("error");
-        setChatMessages((m) => [...m, { role: "assistant", content: `Chat error: server returned ${res.status}.` }]);
-        return;
-      }
+    // ✅ Full searchable tracker index for the assistant
+    rows: summaryItems.map((x) => ({
+      project: x.projectName,
+      responsibility: x.pageName,
+      supplier: x.supplier || "—",
+      item: x.title,
 
-      const data = await res.json().catch(() => ({}));
-      const answer = data?.answer || data?.message || "No response returned from server.";
-      setChatMessages((m) => [...m, { role: "assistant", content: answer }]);
-      setChatStatus("ok");
-    } catch {
+      // key dates
+      requiredOnSite: x.requiredOnSite,
+      statusA: x.statusA,
+      firstIssue: x.firstIssue,
+
+      // durations / timeframe
+      timeframe: x.timeframe,
+      daysReqToStatusA: x.daysReqToStatusA,
+      daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
+      totalDurationDays: x.totalDurationDays,
+
+      // ✅ ALL tick boxes (explicit)
+      ticks: {
+        statusA: YESNO(!!x.statusADone),
+        firstIssue: YESNO(!!x.firstIssueDone),
+        completed: YESNO(!!x.completed),
+        notRequired: YESNO(!!x.notRequired),
+        // optional: only if your summaryItems includes it
+        locked: YESNO(!!x.locked),
+      },
+
+      // comments
+      comments: x.commentsText || "",
+      commentsCount: x.commentsCount || 0,
+
+      status: x.status,
+      traffic: x.traffic,
+    })),
+  };
+}, [summaryItems, view, activeProject, activePage, projects]);
+
+async function sendChat() {
+  const text = chatInput.trim();
+  if (!text || chatBusy) return;
+
+  const next = [...chatMessages, { role: "user", content: text }];
+  setChatMessages(next);
+  setChatInput("");
+  setChatBusy(true);
+  setChatStatus("checking");
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: next,
+        context: chatContext,
+        searchBackups: !!chatSearchBackups,
+      }),
+    });
+
+    if (!res.ok) {
       setChatStatus("error");
       setChatMessages((m) => [
         ...m,
-        { role: "assistant", content: "Chat error: could not reach /api/chat. Check your server is running and route exists." },
+        { role: "assistant", content: `Chat error: server returned ${res.status}.` },
       ]);
-    } finally {
-      setChatBusy(false);
+      return;
     }
+
+    const data = await res.json().catch(() => ({}));
+    const answer = data?.answer || data?.message || "No response returned from server.";
+    setChatMessages((m) => [...m, { role: "assistant", content: answer }]);
+    setChatStatus("ok");
+  } catch {
+    setChatStatus("error");
+    setChatMessages((m) => [
+      ...m,
+      {
+        role: "assistant",
+        content:
+          "Chat error: could not reach /api/chat. Check your server is running and route exists.",
+      },
+    ]);
+  } finally {
+    setChatBusy(false);
   }
+}
 
   /* ---------- boot routing + loading screen ---------- */
   const isBooting = isHydrating || authUser === undefined;
