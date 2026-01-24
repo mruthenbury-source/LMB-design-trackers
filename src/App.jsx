@@ -1134,31 +1134,35 @@ export default function App() {
               const totalDurationDays = diffDaysUTC(dates.firstIssue, dates.requiredOnSite);
 
               out.push({
-                projectId: proj.id,
-                projectName: proj.name,
-                pageId: pg.id,
-                pageName: pg.name,
-                rowId: r.id,
-                title: r.item,
-                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "",
-                requiredOnSite: dates.requiredOnSite,
-                statusA: dates.statusA,
-                firstIssue: dates.firstIssue,
-                anchorKey: r.anchorKey,
-                anchorDateISO: r.anchorDateISO,
-                daysReqToStatusA: d1,
-                daysStatusAToFirstIssue: d2,
-                totalDurationDays,
-                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
-                commentsText,
-                commentsCount: comments.length,
-                completed: !!r.completed,
-                status,
-                traffic,
-              });
-            });
-        });
-    });
+  projectId: proj.id,
+  projectName: proj.name,
+  pageId: pg.id,
+  pageName: pg.name,
+  rowId: r.id,
+  title: r.item,
+  supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "",
+  requiredOnSite: dates.requiredOnSite,
+  statusA: dates.statusA,
+  firstIssue: dates.firstIssue,
+  anchorKey: r.anchorKey,
+  anchorDateISO: r.anchorDateISO,
+  daysReqToStatusA: d1,
+  daysStatusAToFirstIssue: d2,
+  totalDurationDays,
+  timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
+  commentsText,
+  commentsCount: comments.length,
+
+  // ✅ tickboxes (for chat search)
+  completed: !!r.completed,
+  notRequired: !!r.notRequired,        // will always be false here due to filter, but harmless
+  statusADone: !!r.statusADone,
+  firstIssueDone: !!r.firstIssueDone,
+
+  status,
+  traffic,
+});
+
 
     const rank = { overdue: 0, ongoing: 1, done: 2 };
     out.sort((a, b) => {
