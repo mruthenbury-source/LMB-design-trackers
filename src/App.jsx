@@ -463,12 +463,6 @@ export default function App() {
   const [isHydrating, setIsHydrating] = useState(true);
   const [hydrateError, setHydrateError] = useState(null);
 
-  // ✅ Blob save status (auto-save for all users)
-  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
-  const [lastSavedAt, setLastSavedAt] = useState(null);
-  const [saveError, setSaveError] = useState(null);
-  const saveTimerRef = useRef(null);
-
   const [globalDaysReqToStatusA, setGlobalDaysReqToStatusA] = useState(14);
   const [globalDaysStatusAToFirstIssue, setGlobalDaysStatusAToFirstIssue] = useState(28);
 
@@ -516,7 +510,34 @@ export default function App() {
     return roles.includes("administrator") || roles.includes("admin");
   }, [authUser, authRoles]);
 
-  const isGuest = !!authUser && !isAdmin;
+  const rolesLower = useMemo(() => authRoles.map((r) => String(r || "").trim().toLowerCase()), [authRoles]);
+
+  const isOrg1 = useMemo(() => {
+    if (!authUser) return false;
+    return rolesLower.includes("org1") || rolesLower.includes("org 1") || rolesLower.includes("org:1");
+  }, [authUser, rolesLower]);
+
+  const isOrg2 = useMemo(() => {
+    if (!authUser) return false;
+    return rolesLower.includes("org2") || rolesLower.includes("org 2") || rolesLower.includes("org:2");
+  }, [authUser, rolesLower]);
+
+  const isGuest = !!authUser && !isAdmin && !isOrg1 && !isOrg2;
+
+  const perms = useMemo(() => {
+    const canViewAll = isAdmin || isOrg1 || isOrg2;
+    return {
+      canViewAll,
+      canManageProjects: isAdmin,
+      canEditMasterStructure: isAdmin,
+      canEditMasterDates: isAdmin || isOrg1,
+      canEditTrackerDates: isAdmin || isOrg1,
+      canTickMilestones: isAdmin || isGuest,
+      canTickDone: isAdmin || isOrg1,
+      canTickNotRequired: isAdmin,
+      canComment: !!authUser || authUser === null,
+    };
+  }, [isAdmin, isOrg1, isOrg2, isGuest, authUser]);
 
   const hasSupplierAccess = useCallback(
     (supplier) => {
@@ -531,7 +552,7 @@ export default function App() {
 
   // Guests only see projects that have at least one tracker page for their supplier
   const visibleProjects = useMemo(() => {
-    if (isAdmin) return projects;
+    if (perms.canViewAll) return projects;
     if (!projects?.length) return [];
     return projects.filter((p) =>
       (p.pages || []).some((pg) => {
@@ -542,7 +563,7 @@ export default function App() {
         return supplier && hasSupplierAccess(supplier);
       })
     );
-  }, [projects, isAdmin, hasSupplierAccess]);
+  }, [projects, perms.canViewAll, hasSupplierAccess]);
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -747,29 +768,6 @@ export default function App() {
   }, []);
   
 
-
-  // ✅ Save state to Azure Blob via API
-  const saveToBlobNow = useCallback(async (statePayload) => {
-    setSaveStatus("saving");
-    setSaveError(null);
-    try {
-      const res = await fetch("/api/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: statePayload }),
-      });
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(`POST /api/state failed (${res.status}) ${txt || ""}`.trim());
-      }
-      setSaveStatus("saved");
-      setLastSavedAt(new Date().toISOString());
-    } catch (e) {
-      setSaveStatus("error");
-      setSaveError(String(e?.message || e));
-    }
-  }, []);
-
   /* ---- persist ---- */
   useEffect(() => {
     // ✅ prevent overwriting saved data on the first render
@@ -789,12 +787,6 @@ export default function App() {
   
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
-
-    // ✅ Debounced auto-save to Blob for all users
-    clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      saveToBlobNow(payload);
-    }, 700);
     } catch {
       // ignore
     }
@@ -1139,26 +1131,20 @@ export default function App() {
                 pageId: pg.id,
                 pageName: pg.name,
                 rowId: r.id,
-                title: r.item || "Unknown",  // Safeguard for missing item/title
-                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
-                requiredOnSite: dates.requiredOnSite || "N/A",  // Default if not available
-                statusA: dates.statusA || "N/A",  // Default if not available
-                firstIssue: dates.firstIssue || "N/A",  // Default if not available
-                anchorKey: r.anchorKey || "N/A",  // Safeguard
-                anchorDateISO: r.anchorDateISO || "N/A",  // Safeguard
-                daysReqToStatusA: d1 || 0,  // Default to 0 if undefined
-                daysStatusAToFirstIssue: d2 || 0,  // Default to 0 if undefined
-                totalDurationDays: totalDurationDays || 0,  // Default to 0 if undefined
-                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "N/A",
-                commentsText: commentsText || "No comments",  // Safeguard for empty comments
-                commentsCount: comments.length || 0,  // Default to 0 if no comments
-
-                // ✅ tickboxes (for chat search)
-                completed: !!r.completed,  // Ensure it's a boolean (if it's missing, it'll be false)
-                notRequired: !!r.notRequired, // Will always be false if missing
-                statusADone: !!r.statusADone,  // Ensure it's a boolean
-                firstIssueDone: !!r.firstIssueDone,  // Ensure it's a boolean
-
+                title: r.item,
+                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "",
+                requiredOnSite: dates.requiredOnSite,
+                statusA: dates.statusA,
+                firstIssue: dates.firstIssue,
+                anchorKey: r.anchorKey,
+                anchorDateISO: r.anchorDateISO,
+                daysReqToStatusA: d1,
+                daysStatusAToFirstIssue: d2,
+                totalDurationDays,
+                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
+                commentsText,
+                commentsCount: comments.length,
+                completed: !!r.completed,
                 status,
                 traffic,
               });
@@ -1302,134 +1288,75 @@ export default function App() {
   }
 
   /* ------------ build chat context ------------ */
+  const chatContext = useMemo(() => {
+    const overdue = summaryItems.filter((x) => x.status === "overdue").slice(0, 30);
+    const dueSoon = summaryItems
+      .filter((x) => x.status !== "done" && x.statusA)
+      .slice()
+      .sort((a, b) => (parseISO(a.statusA)?.getTime() ?? 9e15) - (parseISO(b.statusA)?.getTime() ?? 9e15))
+      .slice(0, 30);
 
-const YESNO = (b) => (b ? "YES" : "NO");
+    const bySupplier = {};
+    summaryItems.forEach((x) => {
+      const key = x.supplier || "—";
+      bySupplier[key] = bySupplier[key] || { overdue: 0, ongoing: 0, done: 0, total: 0 };
+      bySupplier[key].total += 1;
+      bySupplier[key][x.status] += 1;
+    });
 
-const chatContext = useMemo(() => {
-  const overdue = summaryItems.filter((x) => x.status === "overdue").slice(0, 30);
+    return {
+      today: isoToday(),
+      view,
+      activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
+      activePage: activePage ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster } : null,
+      counts: {
+        projects: projects.length,
+        summaryItems: summaryItems.length,
+        overdue: summaryItems.filter((x) => x.status === "overdue").length,
+        ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
+        done: summaryItems.filter((x) => x.status === "done").length,
+      },
+      sample: {
+        overdueTop: overdue.map((x) => ({
+          project: x.projectName,
+          responsibility: x.pageName,
+          supplier: x.supplier || "—",
+          item: x.title,
+          requiredOnSite: x.requiredOnSite,
+          statusA: x.statusA,
+          traffic: x.traffic,
+        })),
+        upcomingStatusA: dueSoon.map((x) => ({
+          project: x.projectName,
+          responsibility: x.pageName,
+          supplier: x.supplier || "—",
+          item: x.title,
+          statusA: x.statusA,
+          traffic: x.traffic,
+        })),
+      },
+      bySupplier,
 
-  const dueSoon = summaryItems
-    .filter((x) => x.status !== "done" && x.statusA)
-    .slice()
-    .sort(
-      (a, b) =>
-        (parseISO(a.statusA)?.getTime() ?? 9e15) - (parseISO(b.statusA)?.getTime() ?? 9e15)
-    )
-    .slice(0, 30);
-
-  const bySupplier = {};
-  summaryItems.forEach((x) => {
-    const key = x.supplier || "—";
-    bySupplier[key] = bySupplier[key] || { overdue: 0, ongoing: 0, done: 0, total: 0 };
-    bySupplier[key].total += 1;
-    bySupplier[key][x.status] += 1;
-  });
-
-  // Programme index (master) so chat can answer start/finish/duration questions
-  const programme = (projects || []).flatMap((p) =>
-    (p.master || []).flatMap((m) =>
-      (m.levels || []).map((lv) => ({
-        project: p.name || "",
-        blockZone: m.blockZone || "",
-        level: lv.name || "",
-        startDate: lv.startDate || "",
-        finishDate: lv.finishDate || "",
-        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
-      }))
-    )
-  );
-
-  return {
-    app: "SupplySync",
-    today: isoToday(),
-    view,
-
-    activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
-    activePage: activePage
-      ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster }
-      : null,
-
-    counts: {
-      projects: projects.length,
-      summaryItems: summaryItems.length,
-      overdue: summaryItems.filter((x) => x.status === "overdue").length,
-      ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
-      done: summaryItems.filter((x) => x.status === "done").length,
-    },
-
-    sample: {
-      overdueTop: overdue.map((x) => ({
+      // Full searchable index for the assistant (includes dates, durations, timeframe and comments)
+      rows: summaryItems.map((x) => ({
         project: x.projectName,
         responsibility: x.pageName,
         supplier: x.supplier || "—",
         item: x.title,
         requiredOnSite: x.requiredOnSite,
         statusA: x.statusA,
+        firstIssue: x.firstIssue,
+        timeframe: x.timeframe,
+        daysReqToStatusA: x.daysReqToStatusA,
+        daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
+        totalDurationDays: x.totalDurationDays,
+        comments: x.commentsText || "",
+        commentsCount: x.commentsCount || 0,
+        status: x.status,
         traffic: x.traffic,
-        ticks: {
-          statusA: YESNO(!!x.statusADone),
-          firstIssue: YESNO(!!x.firstIssueDone),
-          completed: YESNO(!!x.completed),
-          notRequired: YESNO(!!x.notRequired),
-        },
       })),
-
-      upcomingStatusA: dueSoon.map((x) => ({
-        project: x.projectName,
-        responsibility: x.pageName,
-        supplier: x.supplier || "—",
-        item: x.title,
-        statusA: x.statusA,
-        traffic: x.traffic,
-        ticks: {
-          statusA: YESNO(!!x.statusADone),
-          firstIssue: YESNO(!!x.firstIssueDone),
-          completed: YESNO(!!x.completed),
-          notRequired: YESNO(!!x.notRequired),
-        },
-      })),
-    },
-
-    bySupplier,
-
-    // searchable programme data
-    programme,
-
-    // Full searchable tracker index for the assistant
-    rows: summaryItems.map((x) => ({
-      // (optional but recommended) stable key for backup comparisons
-      key: `${x.projectName} | ${x.pageName} | ${x.supplier || "—"} | ${x.title}`,
-
-      project: x.projectName,
-      responsibility: x.pageName,
-      supplier: x.supplier || "—",
-      item: x.title,
-
-      requiredOnSite: x.requiredOnSite,
-      statusA: x.statusA,
-      firstIssue: x.firstIssue,
-
-      timeframe: x.timeframe,
-      daysReqToStatusA: x.daysReqToStatusA,
-      daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
-      totalDurationDays: x.totalDurationDays,
-
-      ticks: {
-        statusA: YESNO(!!x.statusADone),
-        firstIssue: YESNO(!!x.firstIssueDone),
-        completed: YESNO(!!x.completed),
-        notRequired: YESNO(!!x.notRequired),
-      },
-
-      comments: x.commentsText || "",
-      commentsCount: x.commentsCount || 0,
-
-      status: x.status,
-      traffic: x.traffic,
-    })),
-  };
-}, [summaryItems, view, activeProject, activePage, projects]);
-
+    };
+  }, [summaryItems, view, activeProject, activePage, projects]);
 
   async function sendChat() {
     const text = chatInput.trim();
@@ -1523,44 +1450,6 @@ const chatContext = useMemo(() => {
     );
   }
 
-
-  const saveButton = (
-    <button
-      onClick={() => {
-        // Force an immediate save (clears debounce)
-        clearTimeout(saveTimerRef.current);
-        const payload = {
-          globalDaysReqToStatusA,
-          globalDaysStatusAToFirstIssue,
-          projects,
-          activeProjectId,
-          activePageId,
-          view,
-          summaryFilter,
-          summaryProjectId,
-          summarySupplier,
-        };
-        saveToBlobNow(payload);
-      }}
-      title={saveStatus === "error" ? saveError || "Save failed" : "Saved to Azure Blob"}
-      style={{
-        ...styles.savePill,
-        background:
-          saveStatus === "saving" ? "#FEF3C7" : saveStatus === "saved" ? "#D1FAE5" : saveStatus === "error" ? "#FEE2E2" : "#F3F4F6",
-        color:
-          saveStatus === "saving" ? "#92400E" : saveStatus === "saved" ? "#065F46" : saveStatus === "error" ? "#991B1B" : "#111827",
-      }}
-    >
-      {saveStatus === "saving"
-        ? "Saving…"
-        : saveStatus === "saved"
-        ? `Saved${lastSavedAt ? ` • ${new Date(lastSavedAt).toLocaleTimeString()}` : ""}`
-        : saveStatus === "error"
-        ? "Save failed"
-        : "Saved"}
-    </button>
-  );
-
   /* ---------- VIEW: LANDING ---------- */
   if (view === VIEW.LANDING) {
     return (
@@ -1568,14 +1457,10 @@ const chatContext = useMemo(() => {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                <div>
-                  <h1 style={styles.h1}>SupplySync</h1>
-                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
-                </div>
+              <div>
+                <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
+                <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
               </div>
-              <div style={styles.headerButtons}>{saveButton}</div>
             </div>
 
             <div style={styles.card}>
@@ -1615,10 +1500,11 @@ const chatContext = useMemo(() => {
                     </option>
                   ))}
                 </select>
-
-                <button style={styles.primaryBtn} onClick={addProject}>
-                  + Project
-                </button>
+                {perms.canManageProjects ? (
+                  <button style={styles.primaryBtn} onClick={addProject}>
+                    + Project
+                  </button>
+                ) : null}
 
                 <button style={styles.secondaryBtn} onClick={goToProject}>
                   Go to Project
@@ -1745,15 +1631,11 @@ const chatContext = useMemo(() => {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div style={styles.brandRow}>
-                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-                <div>
-                  <h1 style={styles.h1}>Summary</h1>
-                  <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
-                </div>
+              <div>
+                <h1 style={styles.h1}>Summary</h1>
+                <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
               </div>
               <div style={styles.headerButtons}>
-                {saveButton}
                 <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                   Home
                 </button>
@@ -1904,7 +1786,10 @@ const chatContext = useMemo(() => {
           activePage={activePage}
           authUser={authUser}
           isAdmin={isAdmin}
+          isOrg1={isOrg1}
+          isOrg2={isOrg2}
           isGuest={isGuest}
+          perms={perms}
           hasSupplierAccess={hasSupplierAccess}
           setActiveProjectId={setActiveProjectId}
           setActivePageId={setActivePageId}
@@ -1931,7 +1816,6 @@ const chatContext = useMemo(() => {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
-          saveButton={saveButton}
         />
       </div>
 
@@ -1966,7 +1850,10 @@ function ProjectView(props) {
     activePage,
     authUser,
     isAdmin,
+    isOrg1,
+    isOrg2,
     isGuest,
+    perms,
     hasSupplierAccess,
     setActiveProjectId,
     setActivePageId,
@@ -1992,7 +1879,6 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
-    saveButton,
   } = props;
 
   // Pages a guest is allowed to see inside the active project
@@ -2093,6 +1979,9 @@ function tickMilestone(row, field, checked) {
 
   const locked = !!row?.locks?.[field];
 
+  // Permissions: only Admin + Guests can tick milestones (Status A / First Issue)
+  if (!perms?.canTickMilestones) return;
+
   // Guests: can only tick ONCE if not locked; cannot untick
   if (isGuest) {
     if (!checked) return;          // guests cannot untick
@@ -2124,7 +2013,7 @@ function tickMilestone(row, field, checked) {
   });
 }
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
-  const projectOptions = isAdmin ? projects : visibleProjects?.length ? visibleProjects : projects;
+  const projectOptions = perms?.canViewAll ? projects : visibleProjects?.length ? visibleProjects : projects;
 
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
@@ -2184,15 +2073,11 @@ function tickMilestone(row, field, checked) {
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <div style={styles.brandRow}>
-          <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
-          <div>
-            <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
-            <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
-          </div>
+        <div>
+          <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
+          <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
         </div>
         <div style={styles.headerButtons}>
-                {saveButton}
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
@@ -2241,6 +2126,7 @@ function tickMilestone(row, field, checked) {
           min={0}
           value={globalDaysReqToStatusA}
           onChange={(e) => setGlobalDaysReqToStatusA(clampInt(e.target.value, 0))}
+        disabled={!perms?.canEditTrackerDates}
         />
       </label>
       <label style={styles.label}>
@@ -2251,6 +2137,7 @@ function tickMilestone(row, field, checked) {
           min={0}
           value={globalDaysStatusAToFirstIssue}
           onChange={(e) => setGlobalDaysStatusAToFirstIssue(clampInt(e.target.value, 0))}
+        disabled={!perms?.canEditTrackerDates}
         />
       </label>
     </div>
@@ -2273,7 +2160,7 @@ function tickMilestone(row, field, checked) {
               <div>
                 <h3 style={styles.h3}>Blocks / Zones</h3>
               </div>
-              <button style={styles.primaryBtn} onClick={addMasterRow} disabled={!activeProject}>
+              <button style={styles.primaryBtn} onClick={addMasterRow} disabled={!activeProject || !perms?.canEditMasterStructure}>
                 + Block / Zone
               </button>
             </div>
@@ -2317,6 +2204,7 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 placeholder={`Level ${idx + 1}`}
                                 value={lv.name}
+                                disabled={!isAdmin}
                                 onChange={(e) => updateLevel(m.id, lv.id, { name: e.target.value })}
                               />
                             </td>
@@ -2326,6 +2214,7 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 type="date"
                                 value={lv.startDate}
+                                disabled={!perms?.canEditMasterDates}
                                 onChange={(e) => updateLevel(m.id, lv.id, { startDate: e.target.value })}
                               />
                             </td>
@@ -2335,6 +2224,7 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 type="date"
                                 value={lv.finishDate}
+                                disabled={!perms?.canEditMasterDates}
                                 onChange={(e) => updateLevel(m.id, lv.id, { finishDate: e.target.value })}
                               />
                             </td>
@@ -2369,14 +2259,14 @@ function tickMilestone(row, field, checked) {
 
                             <td style={styles.td}>
                               <div style={styles.inline}>
-                                <button style={styles.smallBtn} onClick={() => addLevel(m.id)}>
+                                <button style={styles.smallBtn} onClick={() => addLevel(m.id)} disabled={!perms?.canEditMasterStructure}>
                                   + Level
                                 </button>
-                                <button style={styles.iconBtn} onClick={() => removeLevel(m.id, lv.id)} title="Remove level">
+                                <button style={styles.iconBtn} onClick={() => removeLevel(m.id, lv.id)} title="Remove level" disabled={!perms?.canEditMasterStructure}>
                                   ✕
                                 </button>
                                 {idx === 0 ? (
-                                  <button style={styles.iconBtn} onClick={() => removeMasterRow(m.id)} title="Remove block/zone">
+                                  <button style={styles.iconBtn} onClick={() => removeMasterRow(m.id)} title="Remove block/zone" disabled={!perms?.canEditMasterStructure}>
                                     🗑
                                   </button>
                                 ) : null}
@@ -2398,7 +2288,7 @@ function tickMilestone(row, field, checked) {
                 <h3 style={styles.h3}>Design Responsibilities</h3>
                 <div style={styles.muted}>Each responsibility creates a page in this project.</div>
               </div>
-              <button style={styles.primaryBtn} onClick={addResponsibility} disabled={!activeProject}>
+              <button style={styles.primaryBtn} onClick={addResponsibility} disabled={!activeProject || !perms?.canEditMasterStructure}>
                 + Responsibility
               </button>
             </div>
@@ -2432,7 +2322,7 @@ function tickMilestone(row, field, checked) {
                         />
                       </td>
                       <td style={styles.td}>
-                        <button style={styles.iconBtn} onClick={() => removeResponsibility(r.id)} title="Remove">
+                        <button style={styles.iconBtn} onClick={() => removeResponsibility(r.id)} title="Remove" disabled={!perms?.canEditMasterStructure}>
                           ✕
                         </button>
                       </td>
@@ -2467,7 +2357,7 @@ function tickMilestone(row, field, checked) {
               </div>
             </div>
             {isAdmin ? (
-              <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage}>
+              <button style={styles.primaryBtn} onClick={addManualRow} disabled={!activePage || !isAdmin}>
                 + Manual row
               </button>
             ) : null}
@@ -2514,7 +2404,7 @@ function tickMilestone(row, field, checked) {
                             type="checkbox"
                             checked={!!r.completed}
                             onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired || !perms?.canTickDone}
                           />
                         )}
                       </td>
@@ -2531,7 +2421,7 @@ function tickMilestone(row, field, checked) {
                                 ...(checked ? { completed: false, statusADone: false, firstIssueDone: false } : {}),
                               });
                             }}
-                            disabled={isGuest}
+                            disabled={!perms?.canTickNotRequired}
                           />
                         )}
                       </td>
@@ -2546,7 +2436,7 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.item}
                             onChange={(e) => updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired || !isAdmin}
                           />
                         )}
                       </td>
@@ -2557,7 +2447,7 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.anchorKey}
                             onChange={(e) => updateRow(r.id, { anchorKey: e.target.value })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired || !isAdmin}
                           >
                             {ANCHORS.map((a) => (
                               <option key={a.key} value={a.key}>
@@ -2575,7 +2465,7 @@ function tickMilestone(row, field, checked) {
                             type="date"
                             value={r.anchorDateISO}
                             onChange={(e) => updateRow(r.id, { anchorDateISO: e.target.value })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired || !perms?.canEditTrackerDates}
                           />
                         )}
                       </td>
@@ -2595,7 +2485,7 @@ function tickMilestone(row, field, checked) {
                           onUnlock={() => adminUnlock(r.id, "statusADone")}
                           onChange={(checked) => tickMilestone(r, "statusADone", checked)}
                           overdue={!!r._overdue?.overdueA}
-                          disabled={disabled || (isGuest && !!r.locks?.statusADone)}
+                          disabled={disabled || !perms?.canTickMilestones || (isGuest && !!r.locks?.statusADone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2611,7 +2501,7 @@ function tickMilestone(row, field, checked) {
                           onUnlock={() => adminUnlock(r.id, "firstIssueDone")}
                           onChange={(checked) => tickMilestone(r, "firstIssueDone", checked)}
                           overdue={!!r._overdue?.overdueF}
-                          disabled={disabled || (isGuest && !!r.locks?.firstIssueDone)}
+                          disabled={disabled || !perms?.canTickMilestones || (isGuest && !!r.locks?.firstIssueDone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2626,7 +2516,7 @@ function tickMilestone(row, field, checked) {
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
                               onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || isGuest}
+                              disabled={r.notRequired || !perms?.canEditTrackerDates}
                               title="Req→A"
                             />
                             <input
@@ -2636,7 +2526,7 @@ function tickMilestone(row, field, checked) {
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
                               onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || isGuest}
+                              disabled={r.notRequired || !perms?.canEditTrackerDates}
                               title="A→First"
                             />
                           </div>
@@ -2653,7 +2543,7 @@ function tickMilestone(row, field, checked) {
 
                       <td style={styles.tdCenter}>
                         {r.kind === "header" ? null : isAdmin ? (
-                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row">
+                          <button style={styles.iconBtn} onClick={() => removeRow(r.id)} title="Delete row" disabled={!isAdmin}>
                             ✕
                           </button>
                         ) : null}
@@ -2834,10 +2724,6 @@ const styles = {
     maxWidth: MAX_W,
   },
   headerButtons: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
-  brandRow: { display: "flex", gap: 12, alignItems: "center" },
-  brandLogo: { width: 44, height: 44, objectFit: "contain" },
-
-  savePill: { padding: "8px 12px", borderRadius: 12, border: "1px solid #E5E7EB", fontWeight: 900, fontSize: 12, cursor: "pointer" },
   h1: { fontSize: 22, margin: 0, lineHeight: 1.2, fontWeight: 900 },
   h2: { fontSize: 15, margin: 0, lineHeight: 1.2, fontWeight: 900 },
   h3: { fontSize: 13, margin: 0, lineHeight: 1.2, fontWeight: 900 },
@@ -2884,8 +2770,8 @@ const styles = {
   selectorBlock: { display: "grid", gap: 6 },
 
   tableTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" },
-  tableWrap: { overflowX: "hidden", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
-  table: { width: "100%", borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
+  tableWrap: { overflowX: "auto", WebkitOverflowScrolling: "touch", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
+  table: { width: "100%", minWidth: 980, borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
 
   th: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 10px", borderBottom: "1px solid #E5E7EB" },
   td: { padding: "10px 10px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", fontSize: 12 },
