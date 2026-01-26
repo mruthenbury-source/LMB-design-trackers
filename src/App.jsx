@@ -1324,6 +1324,21 @@ const chatContext = useMemo(() => {
     bySupplier[key].total += 1;
     bySupplier[key][x.status] += 1;
   });
+  
+  // helpers for programme month searching
+const monthKeyUTC = (iso) => {
+  const d = parseISO(iso);
+  if (!d) return "";
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`; // e.g. 2026-02
+};
+
+const monthNameUTC = (iso) => {
+  const d = parseISO(iso);
+  if (!d) return "";
+  return d.toLocaleString("en-GB", { month: "long", timeZone: "UTC" }); // e.g. February
+};
 
   // Programme index (master) so chat can answer start/finish/duration questions
 const programme = (projects || []).flatMap((p) =>
