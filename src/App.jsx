@@ -1512,7 +1512,7 @@ const chatContext = useMemo(() => {
           <div style={styles.loadingCard}>
             <div style={styles.loadingTitle}>Loading latest tracker data…</div>
             <div style={styles.loadingSub}>
-              Fetching the most recent state from Azure Blob.
+              Syncing the most recent data.
             </div>
             {hydrateError ? (
               <div style={{ marginTop: 10, fontSize: 12, color: "#B91C1C" }}>{hydrateError}</div>
