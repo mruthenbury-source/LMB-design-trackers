@@ -1488,6 +1488,7 @@ return {
 
   // searchable programme data (now supports on-site month spans)
   programme,
+  programmeIndex,
 
   // ✅ NEW: deterministic month lookup for “on site in Feb” type questions
   programmeIndex,
