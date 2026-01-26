@@ -286,6 +286,7 @@ STRICT RULES:
 - When asked to list items, return ALL matching rows or ask the user to narrow scope.
 - Programme questions must search APP_CONTEXT_JSON.programme (not rows).
 - "On site" for programme means programme[].onSiteDate (or finishDate if onSiteDate missing).
+- For ‘on site in <month>’ questions, use programmeIndex[YYYY-MM].projects to list ALL projects.
 - Never guess. If data is missing, say so clearly.
 
 BACKUPS:
