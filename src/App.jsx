@@ -1340,54 +1340,82 @@ const monthNameUTC = (iso) => {
   return d.toLocaleString("en-GB", { month: "long", timeZone: "UTC" }); // e.g. February
 };
 
+  const monthsBetweenUTC = (startISO, endISO) => {
+  const s = parseISO(startISO);
+  const e = parseISO(endISO);
+  if (!s || !e) return [];
+  // normalize order
+  const start = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), 1));
+  const out = [];
+  let cur = start;
+  while (cur.getTime() <= end.getTime()) {
+    const y = cur.getUTCFullYear();
+    const m = String(cur.getUTCMonth() + 1).padStart(2, "0");
+    out.push(`${y}-${m}`);
+    cur = new Date(Date.UTC(y, cur.getUTCMonth() + 1, 1));
+  }
+  return out;
+};
+
+const monthNameFromKeyUTC = (ym) => {
+  // ym like "2026-02"
+  const m = String(ym || "").match(/^(\d{4})-(\d{2})$/);
+  if (!m) return "";
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = new Date(Date.UTC(y, mo - 1, 1));
+  return d.toLocaleString("en-GB", { month: "long", timeZone: "UTC" });
+};
+
+
   // Programme index (master) so chat can answer start/finish/duration questions
 const programme = (projects || []).flatMap((p) =>
   (p.master || []).flatMap((m) =>
     (m.levels || []).map((lv) => {
       const startKey = monthKeyUTC(lv.startDate);
-      const finishKey = monthKeyUTC(lv.finishDate);
+const finishKey = monthKeyUTC(lv.finishDate);
 
-      return {
-        project: p.name || "",
-        blockZone: m.blockZone || "",
-        level: lv.name || "",
+// months covered while "on site" (inclusive)
+const siteMonths = monthsBetweenUTC(lv.startDate, lv.finishDate);
+const siteMonthNames = siteMonths.map(monthNameFromKeyUTC);
 
-        startDate: lv.startDate || "",
-        finishDate: lv.finishDate || "",
+return {
+  project: p.name || "",
+  blockZone: m.blockZone || "",
+  level: lv.name || "",
 
-        // "On site" = finish date (explicit)
-        onSiteDate: lv.finishDate || "",
+  startDate: lv.startDate || "",
+  finishDate: lv.finishDate || "",
+  durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
 
-        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
+  // ✅ explicit start/finish (as you want)
+  startMonthKey: startKey,
+  finishMonthKey: finishKey,
+  startMonthName: monthNameUTC(lv.startDate),
+  finishMonthName: monthNameUTC(lv.finishDate),
 
-        // month tokens
-        startMonthKey: startKey,
-        finishMonthKey: finishKey,
-        onSiteMonthKey: finishKey,
+  // ✅ on-site spans the whole range
+  onSiteRange: lv.startDate && lv.finishDate ? `${lv.startDate} → ${lv.finishDate}` : "",
+  onSiteMonths: siteMonths,          // ["2026-01","2026-02",...]
+  onSiteMonthNames: siteMonthNames,  // ["January","February",...]
 
-        startMonthName: monthNameUTC(lv.startDate),
-        finishMonthName: monthNameUTC(lv.finishDate),
-        onSiteMonthName: monthNameUTC(lv.finishDate),
+  searchText: [
+    p.name,
+    m.blockZone,
+    lv.name,
+    `start:${lv.startDate || ""}`,
+    `finish:${lv.finishDate || ""}`,
+    startKey && `startMonth:${startKey}`,
+    finishKey && `finishMonth:${finishKey}`,
+    siteMonths.length ? `onSiteMonths:${siteMonths.join(",")}` : "",
+    siteMonthNames.length ? `onSiteMonthNames:${siteMonthNames.join(",")}` : "",
+    lv.startDate && lv.finishDate ? `onSite:${lv.startDate}..${lv.finishDate}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | "),
+};
 
-        // searchable string
-        searchText: [
-          p.name,
-          m.blockZone,
-          lv.name,
-          lv.startDate,
-          lv.finishDate,
-          `onSite:${lv.finishDate || ""}`,
-          startKey && `startMonth:${startKey}`,
-          finishKey && `finishMonth:${finishKey}`,
-          finishKey && `onSiteMonth:${finishKey}`,
-          monthNameUTC(lv.finishDate) && `onSiteMonthName:${monthNameUTC(lv.finishDate)}`,
-        ]
-          .filter(Boolean)
-          .join(" | "),
-      };
-    })
-  )
-);
 
   return {
     app: "SupplySync",
