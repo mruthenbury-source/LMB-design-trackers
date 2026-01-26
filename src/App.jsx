@@ -1396,37 +1396,83 @@ const chatContext = useMemo(() => {
     programme,
 
     // Full searchable tracker index for the assistant
-    rows: summaryItems.map((x) => ({
-      // (optional but recommended) stable key for backup comparisons
-      key: `${x.projectName} | ${x.pageName} | ${x.supplier || "—"} | ${x.title}`,
+    rows: summaryItems.map((x) => {
+  const projectId = x.projectId ?? "";
+  const pageId = x.pageId ?? "";
+  const rowId = x.rowId ?? "";
 
-      project: x.projectName,
-      responsibility: x.pageName,
-      supplier: x.supplier || "—",
-      item: x.title,
+  const key = `${projectId}:${pageId}:${rowId}`;
 
-      requiredOnSite: x.requiredOnSite,
-      statusA: x.statusA,
-      firstIssue: x.firstIssue,
+  const ticksBool = {
+    statusA: !!x.statusADone,
+    firstIssue: !!x.firstIssueDone,
+    done: !!x.completed,
+    notRequired: !!x.notRequired,
+  };
 
-      timeframe: x.timeframe,
-      daysReqToStatusA: x.daysReqToStatusA,
-      daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
-      totalDurationDays: x.totalDurationDays,
+  const ticks = {
+    statusA: YESNO(ticksBool.statusA),
+    firstIssue: YESNO(ticksBool.firstIssue),
+    completed: YESNO(ticksBool.done),
+    notRequired: YESNO(ticksBool.notRequired),
+  };
 
-      ticks: {
-        statusA: YESNO(!!x.statusADone),
-        firstIssue: YESNO(!!x.firstIssueDone),
-        completed: YESNO(!!x.completed),
-        notRequired: YESNO(!!x.notRequired),
-      },
+  const commentsAll = x.commentsText || "";
+  const comments =
+    commentsAll.length > 900 ? commentsAll.slice(0, 900) + "…" : commentsAll;
 
-      comments: x.commentsText || "",
-      commentsCount: x.commentsCount || 0,
+  const searchText = [
+    x.projectName,
+    x.pageName,
+    x.supplier || "—",
+    x.title,
+    x.requiredOnSite,
+    x.statusA,
+    x.firstIssue,
+    x.timeframe,
+    `totalDurationDays:${x.totalDurationDays ?? ""}`,
+    `status:${x.status}`,
+    `traffic:${x.traffic}`,
+    `ticks:${Object.entries(ticks)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(",")}`,
+    comments,
+  ]
+    .filter(Boolean)
+    .join(" | ");
 
-      status: x.status,
-      traffic: x.traffic,
-    })),
+  return {
+    key,
+    projectId,
+    pageId,
+    rowId,
+
+    project: x.projectName,
+    responsibility: x.pageName,
+    supplier: x.supplier || "—",
+    item: x.title,
+
+    requiredOnSite: x.requiredOnSite,
+    statusA: x.statusA,
+    firstIssue: x.firstIssue,
+
+    timeframe: x.timeframe,
+    daysReqToStatusA: x.daysReqToStatusA,
+    daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
+    totalDurationDays: x.totalDurationDays,
+
+    ticksBool,
+    ticks,
+
+    comments,
+    commentsCount: x.commentsCount || 0,
+
+    status: x.status,
+    traffic: x.traffic,
+
+    searchText,
+  };
+}),
   };
 }, [summaryItems, view, activeProject, activePage, projects]);
 
