@@ -463,6 +463,12 @@ export default function App() {
   const [isHydrating, setIsHydrating] = useState(true);
   const [hydrateError, setHydrateError] = useState(null);
 
+  // ✅ Blob save status (auto-save for all users)
+  const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const saveTimerRef = useRef(null);
+
   const [globalDaysReqToStatusA, setGlobalDaysReqToStatusA] = useState(14);
   const [globalDaysStatusAToFirstIssue, setGlobalDaysStatusAToFirstIssue] = useState(28);
 
@@ -741,6 +747,29 @@ export default function App() {
   }, []);
   
 
+
+  // ✅ Save state to Azure Blob via API
+  const saveToBlobNow = useCallback(async (statePayload) => {
+    setSaveStatus("saving");
+    setSaveError(null);
+    try {
+      const res = await fetch("/api/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: statePayload }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`POST /api/state failed (${res.status}) ${txt || ""}`.trim());
+      }
+      setSaveStatus("saved");
+      setLastSavedAt(new Date().toISOString());
+    } catch (e) {
+      setSaveStatus("error");
+      setSaveError(String(e?.message || e));
+    }
+  }, []);
+
   /* ---- persist ---- */
   useEffect(() => {
     // ✅ prevent overwriting saved data on the first render
@@ -760,6 +789,12 @@ export default function App() {
   
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
+
+    // ✅ Debounced auto-save to Blob for all users
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveToBlobNow(payload);
+    }, 700);
     } catch {
       // ignore
     }
@@ -1023,29 +1058,6 @@ export default function App() {
     setView(VIEW.PROJECT);
   }
 
-  function deleteActiveProject() {
-    if (!isAdmin) return;
-    if (!activeProject) return;
-
-    const name = activeProject.name || "this project";
-    const ok = window.confirm(`Delete "${name}"? This will remove the project, its pages, and all tracker data. This cannot be undone.`);
-    if (!ok) return;
-
-    setProjects((prev) => {
-      const next = (prev || []).filter((p) => p.id !== activeProject.id);
-
-      const nextProj = next[0] || null;
-      setActiveProjectId(nextProj?.id || null);
-
-      const nextPage = nextProj ? (nextProj.pages?.find((x) => x.meta?.isMaster) || nextProj.pages?.[0]) : null;
-      setActivePageId(nextPage?.id || null);
-
-      setView(nextProj ? VIEW.PROJECT : VIEW.LANDING);
-      return next;
-    });
-  }
-
-
   function goToProject() {
     if (!activeProject) return;
     const mp = activeProject.pages.find((x) => x.meta?.isMaster) || activeProject.pages[0];
@@ -1127,20 +1139,26 @@ export default function App() {
                 pageId: pg.id,
                 pageName: pg.name,
                 rowId: r.id,
-                title: r.item,
-                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "",
-                requiredOnSite: dates.requiredOnSite,
-                statusA: dates.statusA,
-                firstIssue: dates.firstIssue,
-                anchorKey: r.anchorKey,
-                anchorDateISO: r.anchorDateISO,
-                daysReqToStatusA: d1,
-                daysStatusAToFirstIssue: d2,
-                totalDurationDays,
-                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
-                commentsText,
-                commentsCount: comments.length,
-                completed: !!r.completed,
+                title: r.item || "Unknown",  // Safeguard for missing item/title
+                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
+                requiredOnSite: dates.requiredOnSite || "N/A",  // Default if not available
+                statusA: dates.statusA || "N/A",  // Default if not available
+                firstIssue: dates.firstIssue || "N/A",  // Default if not available
+                anchorKey: r.anchorKey || "N/A",  // Safeguard
+                anchorDateISO: r.anchorDateISO || "N/A",  // Safeguard
+                daysReqToStatusA: d1 || 0,  // Default to 0 if undefined
+                daysStatusAToFirstIssue: d2 || 0,  // Default to 0 if undefined
+                totalDurationDays: totalDurationDays || 0,  // Default to 0 if undefined
+                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "N/A",
+                commentsText: commentsText || "No comments",  // Safeguard for empty comments
+                commentsCount: comments.length || 0,  // Default to 0 if no comments
+
+                // ✅ tickboxes (for chat search)
+                completed: !!r.completed,  // Ensure it's a boolean (if it's missing, it'll be false)
+                notRequired: !!r.notRequired, // Will always be false if missing
+                statusADone: !!r.statusADone,  // Ensure it's a boolean
+                firstIssueDone: !!r.firstIssueDone,  // Ensure it's a boolean
+
                 status,
                 traffic,
               });
@@ -1284,75 +1302,134 @@ export default function App() {
   }
 
   /* ------------ build chat context ------------ */
-  const chatContext = useMemo(() => {
-    const overdue = summaryItems.filter((x) => x.status === "overdue").slice(0, 30);
-    const dueSoon = summaryItems
-      .filter((x) => x.status !== "done" && x.statusA)
-      .slice()
-      .sort((a, b) => (parseISO(a.statusA)?.getTime() ?? 9e15) - (parseISO(b.statusA)?.getTime() ?? 9e15))
-      .slice(0, 30);
 
-    const bySupplier = {};
-    summaryItems.forEach((x) => {
-      const key = x.supplier || "—";
-      bySupplier[key] = bySupplier[key] || { overdue: 0, ongoing: 0, done: 0, total: 0 };
-      bySupplier[key].total += 1;
-      bySupplier[key][x.status] += 1;
-    });
+const YESNO = (b) => (b ? "YES" : "NO");
 
-    return {
-      today: isoToday(),
-      view,
-      activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
-      activePage: activePage ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster } : null,
-      counts: {
-        projects: projects.length,
-        summaryItems: summaryItems.length,
-        overdue: summaryItems.filter((x) => x.status === "overdue").length,
-        ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
-        done: summaryItems.filter((x) => x.status === "done").length,
-      },
-      sample: {
-        overdueTop: overdue.map((x) => ({
-          project: x.projectName,
-          responsibility: x.pageName,
-          supplier: x.supplier || "—",
-          item: x.title,
-          requiredOnSite: x.requiredOnSite,
-          statusA: x.statusA,
-          traffic: x.traffic,
-        })),
-        upcomingStatusA: dueSoon.map((x) => ({
-          project: x.projectName,
-          responsibility: x.pageName,
-          supplier: x.supplier || "—",
-          item: x.title,
-          statusA: x.statusA,
-          traffic: x.traffic,
-        })),
-      },
-      bySupplier,
+const chatContext = useMemo(() => {
+  const overdue = summaryItems.filter((x) => x.status === "overdue").slice(0, 30);
 
-      // Full searchable index for the assistant (includes dates, durations, timeframe and comments)
-      rows: summaryItems.map((x) => ({
+  const dueSoon = summaryItems
+    .filter((x) => x.status !== "done" && x.statusA)
+    .slice()
+    .sort(
+      (a, b) =>
+        (parseISO(a.statusA)?.getTime() ?? 9e15) - (parseISO(b.statusA)?.getTime() ?? 9e15)
+    )
+    .slice(0, 30);
+
+  const bySupplier = {};
+  summaryItems.forEach((x) => {
+    const key = x.supplier || "—";
+    bySupplier[key] = bySupplier[key] || { overdue: 0, ongoing: 0, done: 0, total: 0 };
+    bySupplier[key].total += 1;
+    bySupplier[key][x.status] += 1;
+  });
+
+  // Programme index (master) so chat can answer start/finish/duration questions
+  const programme = (projects || []).flatMap((p) =>
+    (p.master || []).flatMap((m) =>
+      (m.levels || []).map((lv) => ({
+        project: p.name || "",
+        blockZone: m.blockZone || "",
+        level: lv.name || "",
+        startDate: lv.startDate || "",
+        finishDate: lv.finishDate || "",
+        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
+      }))
+    )
+  );
+
+  return {
+    app: "SupplySync",
+    today: isoToday(),
+    view,
+
+    activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
+    activePage: activePage
+      ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster }
+      : null,
+
+    counts: {
+      projects: projects.length,
+      summaryItems: summaryItems.length,
+      overdue: summaryItems.filter((x) => x.status === "overdue").length,
+      ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
+      done: summaryItems.filter((x) => x.status === "done").length,
+    },
+
+    sample: {
+      overdueTop: overdue.map((x) => ({
         project: x.projectName,
         responsibility: x.pageName,
         supplier: x.supplier || "—",
         item: x.title,
         requiredOnSite: x.requiredOnSite,
         statusA: x.statusA,
-        firstIssue: x.firstIssue,
-        timeframe: x.timeframe,
-        daysReqToStatusA: x.daysReqToStatusA,
-        daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
-        totalDurationDays: x.totalDurationDays,
-        comments: x.commentsText || "",
-        commentsCount: x.commentsCount || 0,
-        status: x.status,
         traffic: x.traffic,
+        ticks: {
+          statusA: YESNO(!!x.statusADone),
+          firstIssue: YESNO(!!x.firstIssueDone),
+          completed: YESNO(!!x.completed),
+          notRequired: YESNO(!!x.notRequired),
+        },
       })),
-    };
-  }, [summaryItems, view, activeProject, activePage, projects]);
+
+      upcomingStatusA: dueSoon.map((x) => ({
+        project: x.projectName,
+        responsibility: x.pageName,
+        supplier: x.supplier || "—",
+        item: x.title,
+        statusA: x.statusA,
+        traffic: x.traffic,
+        ticks: {
+          statusA: YESNO(!!x.statusADone),
+          firstIssue: YESNO(!!x.firstIssueDone),
+          completed: YESNO(!!x.completed),
+          notRequired: YESNO(!!x.notRequired),
+        },
+      })),
+    },
+
+    bySupplier,
+
+    // searchable programme data
+    programme,
+
+    // Full searchable tracker index for the assistant
+    rows: summaryItems.map((x) => ({
+      // (optional but recommended) stable key for backup comparisons
+      key: `${x.projectName} | ${x.pageName} | ${x.supplier || "—"} | ${x.title}`,
+
+      project: x.projectName,
+      responsibility: x.pageName,
+      supplier: x.supplier || "—",
+      item: x.title,
+
+      requiredOnSite: x.requiredOnSite,
+      statusA: x.statusA,
+      firstIssue: x.firstIssue,
+
+      timeframe: x.timeframe,
+      daysReqToStatusA: x.daysReqToStatusA,
+      daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
+      totalDurationDays: x.totalDurationDays,
+
+      ticks: {
+        statusA: YESNO(!!x.statusADone),
+        firstIssue: YESNO(!!x.firstIssueDone),
+        completed: YESNO(!!x.completed),
+        notRequired: YESNO(!!x.notRequired),
+      },
+
+      comments: x.commentsText || "",
+      commentsCount: x.commentsCount || 0,
+
+      status: x.status,
+      traffic: x.traffic,
+    })),
+  };
+}, [summaryItems, view, activeProject, activePage, projects]);
+
 
   async function sendChat() {
     const text = chatInput.trim();
@@ -1435,7 +1512,7 @@ export default function App() {
           <div style={styles.loadingCard}>
             <div style={styles.loadingTitle}>Loading latest tracker data…</div>
             <div style={styles.loadingSub}>
-              Fetching the most recent state from Azure Blob.
+              Syncing the most recent data.
             </div>
             {hydrateError ? (
               <div style={{ marginTop: 10, fontSize: 12, color: "#B91C1C" }}>{hydrateError}</div>
@@ -1446,6 +1523,44 @@ export default function App() {
     );
   }
 
+
+  const saveButton = (
+    <button
+      onClick={() => {
+        // Force an immediate save (clears debounce)
+        clearTimeout(saveTimerRef.current);
+        const payload = {
+          globalDaysReqToStatusA,
+          globalDaysStatusAToFirstIssue,
+          projects,
+          activeProjectId,
+          activePageId,
+          view,
+          summaryFilter,
+          summaryProjectId,
+          summarySupplier,
+        };
+        saveToBlobNow(payload);
+      }}
+      title={saveStatus === "error" ? saveError || "Save failed" : "Saved to Azure Blob"}
+      style={{
+        ...styles.savePill,
+        background:
+          saveStatus === "saving" ? "#FEF3C7" : saveStatus === "saved" ? "#D1FAE5" : saveStatus === "error" ? "#FEE2E2" : "#F3F4F6",
+        color:
+          saveStatus === "saving" ? "#92400E" : saveStatus === "saved" ? "#065F46" : saveStatus === "error" ? "#991B1B" : "#111827",
+      }}
+    >
+      {saveStatus === "saving"
+        ? "Saving…"
+        : saveStatus === "saved"
+        ? `Saved${lastSavedAt ? ` • ${new Date(lastSavedAt).toLocaleTimeString()}` : ""}`
+        : saveStatus === "error"
+        ? "Save failed"
+        : "Saved"}
+    </button>
+  );
+
   /* ---------- VIEW: LANDING ---------- */
   if (view === VIEW.LANDING) {
     return (
@@ -1453,10 +1568,14 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div>
-                <h1 style={styles.h1}>LMB Design Programme and Trackers</h1>
-                <p style={styles.sub}>Choose a project, then go to its Project Home / tracker pages, or jump to summaries.</p>
+              <div style={styles.brandRow}>
+                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                <div>
+                  <h1 style={styles.h1}>SupplySync</h1>
+                  <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
+                </div>
               </div>
+              <div style={styles.headerButtons}>{saveButton}</div>
             </div>
 
             <div style={styles.card}>
@@ -1500,17 +1619,6 @@ export default function App() {
                 <button style={styles.primaryBtn} onClick={addProject}>
                   + Project
                 </button>
-
-                {isAdmin && (
-                  <button
-                    style={{ ...styles.secondaryBtn, background: "#FEF2F2", color: "#991B1B", border: "1px solid #FCA5A5" }}
-                    onClick={deleteActiveProject}
-                    disabled={!activeProject}
-                    title={!activeProject ? "Select a project to delete" : "Delete the selected project"}
-                  >
-                    Delete Project
-                  </button>
-                )}
 
                 <button style={styles.secondaryBtn} onClick={goToProject}>
                   Go to Project
@@ -1637,11 +1745,15 @@ export default function App() {
         <div style={styles.shell}>
           <div style={styles.page}>
             <div style={styles.header}>
-              <div>
-                <h1 style={styles.h1}>Summary</h1>
-                <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
+              <div style={styles.brandRow}>
+                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+                <div>
+                  <h1 style={styles.h1}>Summary</h1>
+                  <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
+                </div>
               </div>
               <div style={styles.headerButtons}>
+                {saveButton}
                 <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                   Home
                 </button>
@@ -1819,6 +1931,7 @@ export default function App() {
           isMasterPage={isMasterPage}
           setView={setView}
           VIEW={VIEW}
+          saveButton={saveButton}
         />
       </div>
 
@@ -1879,6 +1992,7 @@ function ProjectView(props) {
     isMasterPage,
     setView,
     VIEW,
+    saveButton,
   } = props;
 
   // Pages a guest is allowed to see inside the active project
@@ -2070,11 +2184,15 @@ function tickMilestone(row, field, checked) {
   return (
     <div style={styles.page}>
       <div style={styles.header}>
-        <div>
-          <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
-          <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
+        <div style={styles.brandRow}>
+          <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
+          <div>
+            <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
+            <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
+          </div>
         </div>
         <div style={styles.headerButtons}>
+                {saveButton}
           {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
@@ -2716,6 +2834,10 @@ const styles = {
     maxWidth: MAX_W,
   },
   headerButtons: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  brandRow: { display: "flex", gap: 12, alignItems: "center" },
+  brandLogo: { width: 44, height: 44, objectFit: "contain" },
+
+  savePill: { padding: "8px 12px", borderRadius: 12, border: "1px solid #E5E7EB", fontWeight: 900, fontSize: 12, cursor: "pointer" },
   h1: { fontSize: 22, margin: 0, lineHeight: 1.2, fontWeight: 900 },
   h2: { fontSize: 15, margin: 0, lineHeight: 1.2, fontWeight: 900 },
   h3: { fontSize: 13, margin: 0, lineHeight: 1.2, fontWeight: 900 },
