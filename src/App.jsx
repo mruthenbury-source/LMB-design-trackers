@@ -1366,184 +1366,211 @@ const chatContext = useMemo(() => {
   };
 
   // Programme index (master) so chat can answer start/finish/duration + on-site (range)
-  const programme = (projects || []).flatMap((p) =>
-    (p.master || []).flatMap((m) =>
-      (m.levels || []).map((lv) => {
-        const startKey = monthKeyUTC(lv.startDate);
-        const finishKey = monthKeyUTC(lv.finishDate);
+const programme = (projects || []).flatMap((p) =>
+  (p.master || []).flatMap((m) =>
+    (m.levels || []).map((lv) => {
+      const startKey = monthKeyUTC(lv.startDate);
+      const finishKey = monthKeyUTC(lv.finishDate);
 
-        const onSiteMonths = monthsBetweenUTC(lv.startDate, lv.finishDate);
-        const onSiteMonthNames = onSiteMonths.map(monthNameFromKeyUTC);
-
-        return {
-          project: p.name || "",
-          blockZone: m.blockZone || "",
-          level: lv.name || "",
-
-          startDate: lv.startDate || "",
-          finishDate: lv.finishDate || "",
-          durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
-
-          startMonthKey: startKey,
-          finishMonthKey: finishKey,
-          startMonthName: monthNameUTC(lv.startDate),
-          finishMonthName: monthNameUTC(lv.finishDate),
-
-          onSiteRange: lv.startDate && lv.finishDate ? `${lv.startDate} → ${lv.finishDate}` : "",
-          onSiteMonths,
-          onSiteMonthNames,
-
-          searchText: [
-            p.name,
-            m.blockZone,
-            lv.name,
-            `start:${lv.startDate || ""}`,
-            `finish:${lv.finishDate || ""}`,
-            startKey && `startMonth:${startKey}`,
-            finishKey && `finishMonth:${finishKey}`,
-            onSiteMonths.length ? `onSiteMonths:${onSiteMonths.join(",")}` : "",
-            onSiteMonthNames.length ? `onSiteMonthNames:${onSiteMonthNames.join(",")}` : "",
-            lv.startDate && lv.finishDate ? `onSite:${lv.startDate}..${lv.finishDate}` : "",
-          ]
-            .filter(Boolean)
-            .join(" | "),
-        };
-      })
-    )
-  );
-
-  return {
-    app: "SupplySync",
-    today: isoToday(),
-    view,
-
-    activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
-    activePage: activePage ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster } : null,
-
-    counts: {
-      projects: projects.length,
-      summaryItems: summaryItems.length,
-      overdue: summaryItems.filter((x) => x.status === "overdue").length,
-      ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
-      done: summaryItems.filter((x) => x.status === "done").length,
-    },
-
-    sample: {
-      overdueTop: overdue.map((x) => ({
-        project: x.projectName,
-        responsibility: x.pageName,
-        supplier: x.supplier || "—",
-        item: x.title,
-        requiredOnSite: x.requiredOnSite,
-        statusA: x.statusA,
-        traffic: x.traffic,
-        ticks: {
-          statusA: YESNO(!!x.statusADone),
-          firstIssue: YESNO(!!x.firstIssueDone),
-          completed: YESNO(!!x.completed),
-          notRequired: YESNO(!!x.notRequired),
-        },
-      })),
-
-      upcomingStatusA: dueSoon.map((x) => ({
-        project: x.projectName,
-        responsibility: x.pageName,
-        supplier: x.supplier || "—",
-        item: x.title,
-        statusA: x.statusA,
-        traffic: x.traffic,
-        ticks: {
-          statusA: YESNO(!!x.statusADone),
-          firstIssue: YESNO(!!x.firstIssueDone),
-          completed: YESNO(!!x.completed),
-          notRequired: YESNO(!!x.notRequired),
-        },
-      })),
-    },
-
-    bySupplier,
-
-    // searchable programme data (now supports on-site month spans)
-    programme,
-
-    // Full searchable tracker index for the assistant
-    rows: summaryItems.map((x) => {
-      const projectId = x.projectId ?? "";
-      const pageId = x.pageId ?? "";
-      const rowId = x.rowId ?? "";
-
-      const key = `${projectId}:${pageId}:${rowId}`;
-
-      const ticksBool = {
-        statusA: !!x.statusADone,
-        firstIssue: !!x.firstIssueDone,
-        done: !!x.completed,
-        notRequired: !!x.notRequired,
-      };
-
-      const ticks = {
-        statusA: YESNO(ticksBool.statusA),
-        firstIssue: YESNO(ticksBool.firstIssue),
-        completed: YESNO(ticksBool.done),
-        notRequired: YESNO(ticksBool.notRequired),
-      };
-
-      const commentsAll = x.commentsText || "";
-      const comments = commentsAll.length > 900 ? commentsAll.slice(0, 900) + "…" : commentsAll;
-
-      const searchText = [
-        x.projectName,
-        x.pageName,
-        x.supplier || "—",
-        x.title,
-        x.requiredOnSite,
-        x.statusA,
-        x.firstIssue,
-        x.timeframe,
-        `totalDurationDays:${x.totalDurationDays ?? ""}`,
-        `status:${x.status}`,
-        `traffic:${x.traffic}`,
-        `ticks:${Object.entries(ticks)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(",")}`,
-        comments,
-      ]
-        .filter(Boolean)
-        .join(" | ");
+      const onSiteMonths = monthsBetweenUTC(lv.startDate, lv.finishDate);
+      const onSiteMonthNames = onSiteMonths.map(monthNameFromKeyUTC);
 
       return {
-        key,
-        projectId,
-        pageId,
-        rowId,
+        project: p.name || "",
+        blockZone: m.blockZone || "",
+        level: lv.name || "",
 
-        project: x.projectName,
-        responsibility: x.pageName,
-        supplier: x.supplier || "—",
-        item: x.title,
+        startDate: lv.startDate || "",
+        finishDate: lv.finishDate || "",
+        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
 
-        requiredOnSite: x.requiredOnSite,
-        statusA: x.statusA,
-        firstIssue: x.firstIssue,
+        startMonthKey: startKey,
+        finishMonthKey: finishKey,
+        startMonthName: monthNameUTC(lv.startDate),
+        finishMonthName: monthNameUTC(lv.finishDate),
 
-        timeframe: x.timeframe,
-        daysReqToStatusA: x.daysReqToStatusA,
-        daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
-        totalDurationDays: x.totalDurationDays,
+        onSiteRange: lv.startDate && lv.finishDate ? `${lv.startDate} → ${lv.finishDate}` : "",
+        onSiteMonths,
+        onSiteMonthNames,
 
-        ticksBool,
-        ticks,
-
-        comments,
-        commentsCount: x.commentsCount || 0,
-
-        status: x.status,
-        traffic: x.traffic,
-
-        searchText,
+        searchText: [
+          p.name,
+          m.blockZone,
+          lv.name,
+          `start:${lv.startDate || ""}`,
+          `finish:${lv.finishDate || ""}`,
+          startKey && `startMonth:${startKey}`,
+          finishKey && `finishMonth:${finishKey}`,
+          onSiteMonths.length ? `onSiteMonths:${onSiteMonths.join(",")}` : "",
+          onSiteMonthNames.length ? `onSiteMonthNames:${onSiteMonthNames.join(",")}` : "",
+          lv.startDate && lv.finishDate ? `onSite:${lv.startDate}..${lv.finishDate}` : "",
+        ]
+          .filter(Boolean)
+          .join(" | "),
       };
-    }),
-  };
+    })
+  )
+);
+
+// ✅ NEW: month -> projects/stages index (ensures chat returns ALL projects)
+const programmeIndex = {};
+programme.forEach((s) => {
+  const months = Array.isArray(s.onSiteMonths) ? s.onSiteMonths : [];
+  months.forEach((mk) => {
+    if (!programmeIndex[mk]) programmeIndex[mk] = { projects: new Set(), stages: [] };
+    programmeIndex[mk].projects.add(s.project);
+    programmeIndex[mk].stages.push({
+      project: s.project,
+      blockZone: s.blockZone,
+      level: s.level,
+      startDate: s.startDate,
+      finishDate: s.finishDate,
+      onSiteRange: s.onSiteRange,
+    });
+  });
+});
+
+// JSON-serialisable (Set -> Array)
+Object.keys(programmeIndex).forEach((mk) => {
+  programmeIndex[mk].projects = Array.from(programmeIndex[mk].projects).sort((a, b) => a.localeCompare(b));
+});
+
+return {
+  app: "SupplySync",
+  today: isoToday(),
+  view,
+
+  activeProject: activeProject ? { id: activeProject.id, name: activeProject.name } : null,
+  activePage: activePage ? { id: activePage.id, name: activePage.name, isMaster: !!activePage.meta?.isMaster } : null,
+
+  counts: {
+    projects: projects.length,
+    summaryItems: summaryItems.length,
+    overdue: summaryItems.filter((x) => x.status === "overdue").length,
+    ongoing: summaryItems.filter((x) => x.status === "ongoing").length,
+    done: summaryItems.filter((x) => x.status === "done").length,
+  },
+
+  sample: {
+    overdueTop: overdue.map((x) => ({
+      project: x.projectName,
+      responsibility: x.pageName,
+      supplier: x.supplier || "—",
+      item: x.title,
+      requiredOnSite: x.requiredOnSite,
+      statusA: x.statusA,
+      traffic: x.traffic,
+      ticks: {
+        statusA: YESNO(!!x.statusADone),
+        firstIssue: YESNO(!!x.firstIssueDone),
+        completed: YESNO(!!x.completed),
+        notRequired: YESNO(!!x.notRequired),
+      },
+    })),
+
+    upcomingStatusA: dueSoon.map((x) => ({
+      project: x.projectName,
+      responsibility: x.pageName,
+      supplier: x.supplier || "—",
+      item: x.title,
+      statusA: x.statusA,
+      traffic: x.traffic,
+      ticks: {
+        statusA: YESNO(!!x.statusADone),
+        firstIssue: YESNO(!!x.firstIssueDone),
+        completed: YESNO(!!x.completed),
+        notRequired: YESNO(!!x.notRequired),
+      },
+    })),
+  },
+
+  bySupplier,
+
+  // searchable programme data (now supports on-site month spans)
+  programme,
+
+  // ✅ NEW: deterministic month lookup for “on site in Feb” type questions
+  programmeIndex,
+
+  // Full searchable tracker index for the assistant
+  rows: summaryItems.map((x) => {
+    const projectId = x.projectId ?? "";
+    const pageId = x.pageId ?? "";
+    const rowId = x.rowId ?? "";
+
+    const key = `${projectId}:${pageId}:${rowId}`;
+
+    const ticksBool = {
+      statusA: !!x.statusADone,
+      firstIssue: !!x.firstIssueDone,
+      done: !!x.completed,
+      notRequired: !!x.notRequired,
+    };
+
+    const ticks = {
+      statusA: YESNO(ticksBool.statusA),
+      firstIssue: YESNO(ticksBool.firstIssue),
+      completed: YESNO(ticksBool.done),
+      notRequired: YESNO(ticksBool.notRequired),
+    };
+
+    const commentsAll = x.commentsText || "";
+    const comments = commentsAll.length > 900 ? commentsAll.slice(0, 900) + "…" : commentsAll;
+
+    const searchText = [
+      x.projectName,
+      x.pageName,
+      x.supplier || "—",
+      x.title,
+      x.requiredOnSite,
+      x.statusA,
+      x.firstIssue,
+      x.timeframe,
+      `totalDurationDays:${x.totalDurationDays ?? ""}`,
+      `status:${x.status}`,
+      `traffic:${x.traffic}`,
+      `ticks:${Object.entries(ticks)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(",")}`,
+      comments,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    return {
+      key,
+      projectId,
+      pageId,
+      rowId,
+
+      project: x.projectName,
+      responsibility: x.pageName,
+      supplier: x.supplier || "—",
+      item: x.title,
+
+      requiredOnSite: x.requiredOnSite,
+      statusA: x.statusA,
+      firstIssue: x.firstIssue,
+
+      timeframe: x.timeframe,
+      daysReqToStatusA: x.daysReqToStatusA,
+      daysStatusAToFirstIssue: x.daysStatusAToFirstIssue,
+      totalDurationDays: x.totalDurationDays,
+
+      ticksBool,
+      ticks,
+
+      comments,
+      commentsCount: x.commentsCount || 0,
+
+      status: x.status,
+      traffic: x.traffic,
+
+      searchText,
+    };
+  }),
+};
+
 }, [summaryItems, view, activeProject, activePage, projects]);
 
 
