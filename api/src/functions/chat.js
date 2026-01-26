@@ -284,6 +284,8 @@ STRICT RULES:
 - Dates may appear as requiredOnSite, statusA, firstIssue, timeframe, or duration fields.
 - When asked "is X ticked", respond YES or NO and name the item.
 - When asked to list items, return ALL matching rows or ask the user to narrow scope.
+- Programme questions must search APP_CONTEXT_JSON.programme (not rows).
+- "On site" for programme means programme[].onSiteDate (or finishDate if onSiteDate missing).
 - Never guess. If data is missing, say so clearly.
 
 BACKUPS:
