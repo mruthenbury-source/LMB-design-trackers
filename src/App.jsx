@@ -1326,18 +1326,53 @@ const chatContext = useMemo(() => {
   });
 
   // Programme index (master) so chat can answer start/finish/duration questions
-  const programme = (projects || []).flatMap((p) =>
-    (p.master || []).flatMap((m) =>
-      (m.levels || []).map((lv) => ({
+const programme = (projects || []).flatMap((p) =>
+  (p.master || []).flatMap((m) =>
+    (m.levels || []).map((lv) => {
+      const startKey = monthKeyUTC(lv.startDate);
+      const finishKey = monthKeyUTC(lv.finishDate);
+
+      return {
         project: p.name || "",
         blockZone: m.blockZone || "",
         level: lv.name || "",
+
         startDate: lv.startDate || "",
         finishDate: lv.finishDate || "",
+
+        // "On site" = finish date (explicit)
+        onSiteDate: lv.finishDate || "",
+
         durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
-      }))
-    )
-  );
+
+        // month tokens
+        startMonthKey: startKey,
+        finishMonthKey: finishKey,
+        onSiteMonthKey: finishKey,
+
+        startMonthName: monthNameUTC(lv.startDate),
+        finishMonthName: monthNameUTC(lv.finishDate),
+        onSiteMonthName: monthNameUTC(lv.finishDate),
+
+        // searchable string
+        searchText: [
+          p.name,
+          m.blockZone,
+          lv.name,
+          lv.startDate,
+          lv.finishDate,
+          `onSite:${lv.finishDate || ""}`,
+          startKey && `startMonth:${startKey}`,
+          finishKey && `finishMonth:${finishKey}`,
+          finishKey && `onSiteMonth:${finishKey}`,
+          monthNameUTC(lv.finishDate) && `onSiteMonthName:${monthNameUTC(lv.finishDate)}`,
+        ]
+          .filter(Boolean)
+          .join(" | "),
+      };
+    })
+  )
+);
 
   return {
     app: "SupplySync",
