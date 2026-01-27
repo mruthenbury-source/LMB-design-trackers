@@ -56,24 +56,18 @@ function diffDaysUTC(startISO, finishISO) {
 /* ---------- UI helpers ---------- */
 
 function summaryBorderStyle(it) {
-  // 1) Not required (if ever shown)
+  // Same intent as tracker: tick states + overdue drive row colour, not traffic
   if (it.notRequired) return { boxShadow: "inset 4px 0 0 rgba(17,24,39,0.18)" };
 
-  // 2) Overdue always wins
-  if (it.status === "overdue") return { boxShadow: "inset 4px 0 0 #EF4444" };
+  if (it.status === "overdue") return { boxShadow: "inset 4px 0 0 #EF4444" }; // late
+  if (it.completed) return { boxShadow: "inset 4px 0 0 #10B981" }; // done
 
-  // 3) Done wins next
-  if (it.completed || it.status === "done") return { boxShadow: "inset 4px 0 0 #10B981" };
+  if (it.firstIssueDone) return { boxShadow: "inset 4px 0 0 #2563EB" }; // first issue ticked
+  if (it.statusADone) return { boxShadow: "inset 4px 0 0 #F59E0B" }; // status A ticked
 
-  // 4) First Issue approved (blue)
-  if (it.firstIssueDone) return { boxShadow: "inset 4px 0 0 #2563EB" };
-
-  // 5) Status A approved (amber)
-  if (it.statusADone) return { boxShadow: "inset 4px 0 0 #F59E0B" };
-
-  // default
   return {};
 }
+
 
 
 /* ---------- schedule model ---------- */
@@ -1174,7 +1168,7 @@ export default function App() {
                 timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "N/A",
                 commentsText: commentsText || "No comments",  // Safeguard for empty comments
                 commentsCount: comments.length || 0,  // Default to 0 if no comments
-
+              
                 // ✅ tickboxes (for chat search)
                 completed: !!r.completed,  // Ensure it's a boolean (if it's missing, it'll be false)
                 notRequired: !!r.notRequired, // Will always be false if missing
