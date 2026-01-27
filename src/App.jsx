@@ -1322,39 +1322,62 @@ const chatContext = useMemo(() => {
   });
 
   // --- programme helpers (inside useMemo so scope is guaranteed) ---
-  const monthKeyUTC = (iso) => {
-    const d = parseISO(iso);
-    if (!d) return "";
-    const y = d.getUTCFullYear();
-    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-    return `${y}-${m}`; // e.g. 2026-02
-  };
+  const parseDateUTC = (s) => {
+  if (!s) return null;
+  const str = String(s).trim();
 
-  const monthNameUTC = (iso) => {
-    const d = parseISO(iso);
-    if (!d) return "";
-    return d.toLocaleString("en-GB", { month: "long", timeZone: "UTC" }); // e.g. February
-  };
+  // ISO: YYYY-MM-DD
+  let m = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
 
-  const monthsBetweenUTC = (startISO, endISO) => {
-    const s = parseISO(startISO);
-    const e = parseISO(endISO);
-    if (!s || !e) return [];
+  // UK: DD/MM/YYYY
+  m = str.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) {
+    const d = Number(m[1]), mo = Number(m[2]), y = Number(m[3]);
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
 
-    const start = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), 1));
-    const end = new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), 1));
+  return null;
+};
 
-    const out = [];
-    let cur = start;
+  const monthKeyUTC = (dateStr) => {
+  const d = parseDateUTC(dateStr);
+  if (!d) return "";
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+};
 
-    while (cur.getTime() <= end.getTime()) {
-      const y = cur.getUTCFullYear();
-      const m = String(cur.getUTCMonth() + 1).padStart(2, "0");
-      out.push(`${y}-${m}`);
-      cur = new Date(Date.UTC(y, cur.getUTCMonth() + 1, 1));
-    }
-    return out;
-  };
+const monthNameUTC = (dateStr) => {
+  const d = parseDateUTC(dateStr);
+  if (!d) return "";
+  return d.toLocaleString("en-GB", { month: "long", timeZone: "UTC" });
+};
+
+const monthsBetweenUTC = (startStr, endStr) => {
+  const s = parseDateUTC(startStr);
+  const e = parseDateUTC(endStr);
+  if (!s || !e) return [];
+
+  const start = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), 1));
+
+  const out = [];
+  let cur = start;
+
+  while (cur.getTime() <= end.getTime()) {
+    const y = cur.getUTCFullYear();
+    const m = String(cur.getUTCMonth() + 1).padStart(2, "0");
+    out.push(`${y}-${m}`);
+    cur = new Date(Date.UTC(y, cur.getUTCMonth() + 1, 1));
+  }
+  return out;
+};
 
   const monthNameFromKeyUTC = (ym) => {
     const match = String(ym || "").match(/^(\d{4})-(\d{2})$/);
