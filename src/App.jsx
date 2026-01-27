@@ -56,12 +56,13 @@ function diffDaysUTC(startISO, finishISO) {
 /* ---------- UI helpers ---------- */
 
 function summaryBorderStyle(it) {
-  if (it.status === "overdue") return { boxShadow: "inset 4px 0 0 #EF4444" }; // red
-  if (it.completed) return { boxShadow: "inset 4px 0 0 #10B981" };           // green
-  if (it.firstIssueDone) return { boxShadow: "inset 4px 0 0 #2563EB" };       // blue
-  if (it.statusADone) return { boxShadow: "inset 4px 0 0 #F59E0B" };          // amber
-  return {};
+  if (it.status === "overdue") return "4px solid #EF4444";     // red
+  if (it.completed) return "4px solid #10B981";               // green
+  if (it.firstIssueDone) return "4px solid #2563EB";          // blue
+  if (it.statusADone) return "4px solid #F59E0B";             // amber
+  return "4px solid transparent";
 }
+
 
 /* ---------- schedule model ---------- */
 const ANCHORS = [
@@ -2023,12 +2024,13 @@ return {
                   <tbody>
                     {filteredSummary.map((it) => (
                       <tr
-                          key={`${it.projectId}:${it.pageId}:${it.rowId}`}
-                             style={{
-                          ...styles.trBase,
-                          ...summaryBorderStyle(it),
-                          }}
-                          >
+                      key={`${it.projectId}:${it.pageId}:${it.rowId}`}
+                      style={{
+                      ...styles.trBase,
+                      borderLeft: summaryBorderStyle(it),
+                      }}
+                      >
+
                         <td style={styles.td}>
                           <StatusBadge status={it.status} />
                         </td>
