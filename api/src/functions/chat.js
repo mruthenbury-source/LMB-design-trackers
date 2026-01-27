@@ -332,6 +332,7 @@ PROGRAMME RULES (master schedule):
   - programmeIndex is COMPLETE and AUTHORITATIVE
   - Do NOT infer from programme[] when programmeIndex exists
   - If stages are requested, use programmeIndex[YYYY-MM].stages.
+  - If PROGRAMME_INDEX_MATCH is present, it is complete and authoritative: use it first and do not omit items.
 
 BACKUPS:
 - If BACKUPS_JSON is present, you may compare snapshots.
@@ -340,11 +341,42 @@ BACKUPS:
 
 Prefer accuracy over brevity.
 `;
-;
+
+
+      
+      // Deterministic programme month slice for “on site in <month>” questions (prevents omissions)
+      const userText =
+        Array.isArray(messages) && messages.length
+          ? String(messages[messages.length - 1]?.content || "")
+          : "";
+
+      const todayISO = safeStr(appContext?.today) || new Date().toISOString().slice(0, 10);
+      const fallbackYear = todayISO.slice(0, 4);
+
+      let programmeIndexMatch = null;
+      if (isProgrammeMonthQuery(userText)) {
+        const mk = monthKeyFromText(userText, fallbackYear);
+        const idx = appContext?.programmeIndex || null;
+
+        if (mk && idx && idx[mk]) {
+          programmeIndexMatch = {
+            monthKey: mk,
+            projects: idx[mk]?.projects || [],
+            stages: idx[mk]?.stages || [],
+            projectCount: Array.isArray(idx[mk]?.projects) ? idx[mk].projects.length : 0,
+            stageCount: Array.isArray(idx[mk]?.stages) ? idx[mk].stages.length : 0,
+            instruction:
+              "Use PROGRAMME_INDEX_MATCH as complete authoritative data for 'on site in this month' questions. Do not omit any projects/stages.",
+          };
+        }
+      }
 
       const input = [
         { role: "system", content: systemText },
         { role: "system", content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}` },
+        ...(programmeIndexMatch
+          ? [{ role: "system", content: `PROGRAMME_INDEX_MATCH:\n${JSON.stringify(programmeIndexMatch, null, 2)}` }]
+          : []),
         ...(searchBackups
           ? [{ role: "system", content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {}, null, 2)}` }]
           : []),
