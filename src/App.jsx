@@ -2024,45 +2024,31 @@ return {
                   <tbody>
                     {filteredSummary.map((it) => (
                       <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`} style={styles.trBase}>
-                      <td
-                      style={{
-                      ...styles.td,
-                      borderLeft: summaryBorderStyle(it),
-                      paddingLeft: 10, // keeps text aligned after border
-                      }}
-                      >
-                        <td style={styles.td}>
-                          <StatusBadge status={it.status} />
-                        </td>
-                        <td style={styles.tdCenter}>
-                          <TrafficDot status={it.traffic} />
-                        </td>
-                        <td style={styles.td}>{it.projectName}</td>
-                        <td style={styles.td}>{it.pageName}</td>
-                        <td style={styles.td}>{it.supplier || "—"}</td>
-                        <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
-                        <td style={styles.td}>
-                          <div style={styles.pillCompact}>{it.requiredOnSite || "—"}</div>
-                        </td>
-                        <td style={styles.td}>
-                          <div style={styles.pillCompact}>{it.statusA || "—"}</div>
-                        </td>
-                        <td style={styles.td}>
-                          <div style={styles.pillCompact}>{it.firstIssue || "—"}</div>
-                        </td>
-                        <td style={styles.td}>
-                          <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
-                            Open
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {!filteredSummary.length ? (
-                      <tr>
-                        <td style={styles.td} colSpan={10}>
-                          <div style={{ color: "#6B7280" }}>No items.</div>
-                        </td>
-                      </tr>
+  <td
+    style={{
+      ...styles.td,
+      borderLeft: summaryBorderStyle(it),
+      paddingLeft: 10, // keeps text aligned after border
+    }}
+  >
+    <StatusBadge status={it.status} />
+  </td>
+
+  <td style={styles.tdCenter}>
+    <TrafficDot status={it.traffic} />
+  </td>
+  <td style={styles.td}>{it.projectName}</td>
+  <td style={styles.td}>{it.pageName}</td>
+  <td style={styles.td}>{it.supplier || "—"}</td>
+  <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
+  <td style={styles.td}><div style={styles.pillCompact}>{it.requiredOnSite || "—"}</div></td>
+  <td style={styles.td}><div style={styles.pillCompact}>{it.statusA || "—"}</div></td>
+  <td style={styles.td}><div style={styles.pillCompact}>{it.firstIssue || "—"}</div></td>
+  <td style={styles.td}>
+    <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>Open</button>
+  </td>
+</tr>
+
                     ) : null}
                   </tbody>
                 </table>
