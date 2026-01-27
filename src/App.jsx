@@ -56,27 +56,10 @@ function diffDaysUTC(startISO, finishISO) {
 /* ---------- UI helpers ---------- */
 
 function summaryBorderStyle(it) {
-  // EXACT same intent as tracker row colouring
-  if (it.notRequired) {
-    return { boxShadow: "inset 4px 0 0 rgba(17,24,39,0.25)" };
-  }
-
-  if (it.status === "overdue") {
-    return { boxShadow: "inset 4px 0 0 #EF4444" }; // red
-  }
-
-  if (it.completed) {
-    return { boxShadow: "inset 4px 0 0 #10B981" }; // green
-  }
-
-  if (it.firstIssueDone) {
-    return { boxShadow: "inset 4px 0 0 #2563EB" }; // blue
-  }
-
-  if (it.statusADone) {
-    return { boxShadow: "inset 4px 0 0 #F59E0B" }; // amber
-  }
-
+  if (it.status === "overdue") return { boxShadow: "inset 4px 0 0 #EF4444" }; // red
+  if (it.completed) return { boxShadow: "inset 4px 0 0 #10B981" };           // green
+  if (it.firstIssueDone) return { boxShadow: "inset 4px 0 0 #2563EB" };       // blue
+  if (it.statusADone) return { boxShadow: "inset 4px 0 0 #F59E0B" };          // amber
   return {};
 }
 
@@ -1167,15 +1150,15 @@ export default function App() {
                 rowId: r.id,
                 title: r.item || "Unknown",  // Safeguard for missing item/title
                 supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
-                requiredOnSite: dates.requiredOnSite || "N/A",  // Default if not available
-                statusA: dates.statusA || "N/A",  // Default if not available
-                firstIssue: dates.firstIssue || "N/A",  // Default if not available
+                requiredOnSite: dates.requiredOnSite || "",
+                statusA: dates.statusA || "",
+                firstIssue: dates.firstIssue || "",
                 anchorKey: r.anchorKey || "N/A",  // Safeguard
                 anchorDateISO: r.anchorDateISO || "N/A",  // Safeguard
                 daysReqToStatusA: d1 || 0,  // Default to 0 if undefined
                 daysStatusAToFirstIssue: d2 || 0,  // Default to 0 if undefined
                 totalDurationDays: totalDurationDays || 0,  // Default to 0 if undefined
-                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "N/A",
+                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
                 commentsText: commentsText || "No comments",  // Safeguard for empty comments
                 commentsCount: comments.length || 0,  // Default to 0 if no comments
               
