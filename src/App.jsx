@@ -53,6 +53,14 @@ function diffDaysUTC(startISO, finishISO) {
   if (!Number.isFinite(diff)) return null;
   return Math.round(diff / dayMs());
 }
+/* ---------- UI helpers ---------- */
+
+function summaryBorderStyle(item) {
+  if (item.status === "overdue") return "2px solid #EF4444"; // red
+  if (item.status === "done") return "2px solid #10B981";    // green
+  if (item.traffic === "amber") return "2px solid #F59E0B"; // amber
+  return "2px solid #E5E7EB"; // neutral
+}
 
 /* ---------- schedule model ---------- */
 const ANCHORS = [
@@ -1993,9 +2001,12 @@ return {
                   <tbody>
                     {filteredSummary.map((it) => (
                       <tr
-                        key={`${it.projectId}:${it.pageId}:${it.rowId}`}
-                        style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
-                      >
+                          key={`${it.projectId}:${it.pageId}:${it.rowId}`}
+                             style={{
+                          ...styles.trBase,
+                          borderLeft: summaryBorderStyle(it),
+                          }}
+                          >
                         <td style={styles.td}>
                           <StatusBadge status={it.status} />
                         </td>
