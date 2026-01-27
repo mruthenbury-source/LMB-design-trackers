@@ -3124,6 +3124,7 @@ const styles = {
   smallBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
   iconBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer" },
   unlockBtn: { background: "#FEF2F2", color: "#991B1B", border: "1px solid #FCA5A5", borderRadius: 999, padding: "6px 8px", fontSize: 11, cursor: "pointer", fontWeight: 900 },
+  dangerBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 14, padding: "10px 12px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
 
   /* --- Modal (comments) --- */
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 },
