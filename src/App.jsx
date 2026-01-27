@@ -1803,6 +1803,27 @@ return {
                   Go to Project
                 </button>
               </div>
+              <button
+  style={styles.dangerBtn}
+  onClick={() => {
+    if (!activeProject) return;
+
+    const ok = window.confirm(
+      `Are you sure you want to remove "${activeProject.name}"?\n\n` +
+      `This cannot be undone.\n\n` +
+      `If a backup exists from before the last save, the project can be recovered from backup.`
+    );
+
+    if (!ok) return;
+
+    setProjects((prev) => prev.filter((p) => p.id !== activeProject.id));
+    setActiveProjectId(null);
+    setActivePageId(null);
+    setView(VIEW.LANDING);
+  }}
+>
+  Remove Project
+</button>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
                 <button
