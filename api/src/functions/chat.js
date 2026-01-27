@@ -50,6 +50,43 @@ function diffDaysUTC(aISO, bISO) {
   return Math.round((b.getTime() - a.getTime()) / 86400000);
 }
 
+const MONTHS = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+};
+
+function monthKeyFromText(text, defaultYear) {
+  const t = String(text || "").toLowerCase();
+
+  // match month words
+  const monthWord = Object.keys(MONTHS).find((k) => new RegExp(`\\b${k}\\b`).test(t));
+  if (!monthWord) return null;
+
+  // match year (e.g. 2026). If not present, use defaultYear.
+  const yearMatch = t.match(/\b(20\d{2})\b/);
+  const year = yearMatch ? Number(yearMatch[1]) : Number(defaultYear);
+
+  const m = MONTHS[monthWord];
+  const mm = String(m).padStart(2, "0");
+  return `${year}-${mm}`; // e.g. 2026-02
+}
+
+function isProgrammeMonthQuery(text) {
+  const t = String(text || "").toLowerCase();
+  // “on site”, “onsite”, “programme”, “stage” etc.
+  return /\bon\s*site\b|\bonsite\b|\bprogramme\b|\bstage\b|\blevel\b/.test(t);
+}
+
 /* ---------------- index builders ---------------- */
 
 // Builds a minimal “chat-like context” from a saved state.json payload.
@@ -288,6 +325,8 @@ STRICT RULES:
 - "On site" for programme means programme[].onSiteDate (or finishDate if onSiteDate missing).
 - For ‘on site in <month>’ questions, use programmeIndex[YYYY-MM].projects to list ALL projects.
 - Never guess. If data is missing, say so clearly.
+- IMPORTANT: For 'on site in <month>' questions, use PROGRAMME_INDEX_MATCH if provided; it is complete and authoritative.
+
 
 BACKUPS:
 - If BACKUPS_JSON is present, you may compare snapshots.
