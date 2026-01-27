@@ -56,19 +56,29 @@ function diffDaysUTC(startISO, finishISO) {
 /* ---------- UI helpers ---------- */
 
 function summaryBorderStyle(it) {
-  // Same intent as tracker: tick states + overdue drive row colour, not traffic
-  if (it.notRequired) return { boxShadow: "inset 4px 0 0 rgba(17,24,39,0.18)" };
+  // EXACT same intent as tracker row colouring
+  if (it.notRequired) {
+    return { boxShadow: "inset 4px 0 0 rgba(17,24,39,0.25)" };
+  }
 
-  if (it.status === "overdue") return { boxShadow: "inset 4px 0 0 #EF4444" }; // late
-  if (it.completed) return { boxShadow: "inset 4px 0 0 #10B981" }; // done
+  if (it.status === "overdue") {
+    return { boxShadow: "inset 4px 0 0 #EF4444" }; // red
+  }
 
-  if (it.firstIssueDone) return { boxShadow: "inset 4px 0 0 #2563EB" }; // first issue ticked
-  if (it.statusADone) return { boxShadow: "inset 4px 0 0 #F59E0B" }; // status A ticked
+  if (it.completed) {
+    return { boxShadow: "inset 4px 0 0 #10B981" }; // green
+  }
+
+  if (it.firstIssueDone) {
+    return { boxShadow: "inset 4px 0 0 #2563EB" }; // blue
+  }
+
+  if (it.statusADone) {
+    return { boxShadow: "inset 4px 0 0 #F59E0B" }; // amber
+  }
 
   return {};
 }
-
-
 
 /* ---------- schedule model ---------- */
 const ANCHORS = [
