@@ -3047,6 +3047,13 @@ const styles = {
   sub: { margin: "6px 0 0", color: "#4B5563", fontSize: 13 },
   muted: { color: "#6B7280", fontSize: 12 },
 
+  stickyCol: {
+  position: "sticky",
+  left: 0,
+  background: "#FFFFFF",
+  zIndex: 2,
+  boxShadow: "2px 0 0 rgba(0,0,0,0.05)",
+}
   card: {
     background: "rgba(255,255,255,0.9)",
     border: "1px solid #E5E7EB",
@@ -3087,7 +3094,7 @@ const styles = {
   selectorBlock: { display: "grid", gap: 6 },
 
   tableTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" },
-  tableWrap: { overflowX: "hidden", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
+  tableWrap: { overflowX: "auto", WebkitOverflowScrolling: "touch", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
   table: { width: "100%", borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
 
   th: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 10px", borderBottom: "1px solid #E5E7EB" },
