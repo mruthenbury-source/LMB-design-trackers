@@ -333,6 +333,10 @@ PROGRAMME RULES (master schedule):
   - Do NOT infer from programme[] when programmeIndex exists
   - If stages are requested, use programmeIndex[YYYY-MM].stages.
   - If PROGRAMME_INDEX_MATCH is present, it is complete and authoritative: use it first and do not omit items.
+  - When PROGRAMME_INDEX_MATCH is present, you MUST:
+  1) State projectCount and stageCount exactly as provided.
+  2) List EVERY project and EVERY stage. Do not summarise or omit.
+  3) If you cannot fit everything, say "OUTPUT_TOO_LONG" and return JSON listing only (no prose).
 
 BACKUPS:
 - If BACKUPS_JSON is present, you may compare snapshots.
