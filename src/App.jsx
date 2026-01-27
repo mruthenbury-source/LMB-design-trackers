@@ -56,10 +56,16 @@ function diffDaysUTC(startISO, finishISO) {
 /* ---------- UI helpers ---------- */
 
 function summaryBorderStyle(item) {
-  if (item.status === "overdue") return "2px solid #EF4444"; // red
-  if (item.status === "done") return "2px solid #10B981";    // green
-  if (item.traffic === "amber") return "2px solid #F59E0B"; // amber
-  return "2px solid #E5E7EB"; // neutral
+  if (item.status === "overdue") {
+    return { boxShadow: "inset 4px 0 0 #EF4444" }; // red
+  }
+  if (item.status === "done") {
+    return { boxShadow: "inset 4px 0 0 #10B981" }; // green
+  }
+  if (item.traffic === "amber") {
+    return { boxShadow: "inset 4px 0 0 #F59E0B" }; // amber
+  }
+  return {};
 }
 
 /* ---------- schedule model ---------- */
@@ -2004,7 +2010,7 @@ return {
                           key={`${it.projectId}:${it.pageId}:${it.rowId}`}
                              style={{
                           ...styles.trBase,
-                          borderLeft: summaryBorderStyle(it),
+                          ...summaryBorderStyle(it),
                           }}
                           >
                         <td style={styles.td}>
