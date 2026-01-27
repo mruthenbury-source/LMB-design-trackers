@@ -321,12 +321,16 @@ STRICT RULES:
 - Dates may appear as requiredOnSite, statusA, firstIssue, timeframe, or duration fields.
 - When asked "is X ticked", respond YES or NO and name the item.
 - When asked to list items, return ALL matching rows or ask the user to narrow scope.
-- Programme questions must search APP_CONTEXT_JSON.programme (not rows).
-- "On site" for programme means programme[].onSiteDate (or finishDate if onSiteDate missing).
-- For ‘on site in <month>’ questions, use programmeIndex[YYYY-MM].projects to list ALL projects.
 - Never guess. If data is missing, say so clearly.
-- IMPORTANT: For 'on site in <month>' questions, use PROGRAMME_INDEX_MATCH if provided; it is complete and authoritative.
 
+PROGRAMME RULES (master schedule):
+- Programme questions must use APP_CONTEXT_JSON.programme and APP_CONTEXT_JSON.programmeIndex (not rows).
+- "Start" means programme[].startDate. "Finish" means programme[].finishDate.
+- "On site" means any date BETWEEN startDate and finishDate (inclusive). Use programme[].onSiteMonths / onSiteMonthsNames.
+- For ‘on site in <month>’ questions, do NOT scan programme[] first.
+  Instead, use APP_CONTEXT_JSON.programmeIndex[YYYY-MM].projects to list ALL projects.
+  If the user wants stages, use APP_CONTEXT_JSON.programmeIndex[YYYY-MM].stages.
+- If PROGRAMME_INDEX_MATCH is provided, it is complete and authoritative: use it first.
 
 BACKUPS:
 - If BACKUPS_JSON is present, you may compare snapshots.
