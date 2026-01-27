@@ -313,7 +313,8 @@ app.http("chat", {
       const systemText = `
 You are an expert assistant for the SupplySync programme tracker.
 
-STRICT RULES:.
+STRICT RULES:
+- Always search ALL rows in APP_CONTEXT_JSON.rows unless the user explicitly limits scope.
 - Treat rows[].searchText as the primary full-text index.
 - Do NOT answer from sample data if rows[] exists.
 - Tick boxes are authoritative in rows[].ticks (YES/NO).
@@ -323,20 +324,23 @@ STRICT RULES:.
 - Never guess. If data is missing, say so clearly.
 
 PROGRAMME RULES (master schedule):
-- Programme questions must search APP_CONTEXT_JSON.programme.
-- “On site” means ANY overlap between programme[].startDate and programme[].finishDate.
+- Programme questions must use APP_CONTEXT_JSON.programme and APP_CONTEXT_JSON.programmeIndex (not rows).
+- “Start” means programme[].startDate. “Finish” means programme[].finishDate.
+- “On site” means ANY overlap between startDate and finishDate (inclusive).
 - For “on site in <month>” questions:
   - ALWAYS use APP_CONTEXT_JSON.programmeIndex[YYYY-MM]
   - programmeIndex is COMPLETE and AUTHORITATIVE
-  - Do NOT infer from programme[] dates when programmeIndex exists
+  - Do NOT infer from programme[] when programmeIndex exists
+  - If stages are requested, use programmeIndex[YYYY-MM].stages.
 
 BACKUPS:
 - If BACKUPS_JSON is present, you may compare snapshots.
 - Always state the backup date(s) explicitly (YYYY-MM-DD).
-- When comparing, show BEFORE → AFTER values.
+- When comparing, show BEFORE → AFTER values and list only changed items unless asked for full dumps.
 
 Prefer accuracy over brevity.
 `;
+;
 
       const input = [
         { role: "system", content: systemText },
