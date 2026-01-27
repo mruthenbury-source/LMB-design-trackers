@@ -1490,9 +1490,6 @@ return {
   programme,
   programmeIndex,
 
-  // ✅ NEW: deterministic month lookup for “on site in Feb” type questions
-  programmeIndex,
-
   // Full searchable tracker index for the assistant
   rows: summaryItems.map((x) => {
     const projectId = x.projectId ?? "";
