@@ -2023,14 +2023,14 @@ return {
                   </thead>
                   <tbody>
                     {filteredSummary.map((it) => (
-                      <tr
-                      key={`${it.projectId}:${it.pageId}:${it.rowId}`}
+                      <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`} style={styles.trBase}>
+                      <td
                       style={{
-                      ...styles.trBase,
+                      ...styles.td,
                       borderLeft: summaryBorderStyle(it),
+                      paddingLeft: 10, // keeps text aligned after border
                       }}
                       >
-
                         <td style={styles.td}>
                           <StatusBadge status={it.status} />
                         </td>
