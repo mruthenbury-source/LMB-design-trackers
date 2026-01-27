@@ -1435,37 +1435,9 @@ const programme = (projects || []).flatMap((p) =>
   )
 );
   
-  // --- AUGMENT programme with derived stages (prevents missing levels) ---
-const derivedProgrammeStages = summaryItems
-  .filter((x) => x.firstIssue && x.requiredOnSite)
-  .map((x) => {
-    const onSiteMonths = monthsBetweenUTC(
-      x.firstIssue,
-      x.requiredOnSite
-    );
-
-    return {
-      project: x.projectName || "",
-      blockZone:
-        x.meta?.blockZone ||
-        x.blockZone ||
-        "—",
-      level:
-        x.meta?.levelName ||
-        x.level ||
-        "—",
-
-      startDate: x.firstIssue,
-      finishDate: x.requiredOnSite,
-      onSiteRange: `${x.firstIssue} → ${x.requiredOnSite}`,
-      onSiteMonths,
-    };
-  });
-
-
 // ✅ NEW: month -> projects/stages index (ensures chat returns ALL projects)
 const programmeIndex = {};
-[...programme, ...derivedProgrammeStages].forEach((s) => {
+programme.forEach((s) => {
   const months = Array.isArray(s.onSiteMonths) ? s.onSiteMonths : [];
   months.forEach((mk) => {
     if (!programmeIndex[mk]) programmeIndex[mk] = { projects: new Set(), stages: [] };
