@@ -3047,14 +3047,7 @@ const styles = {
   sub: { margin: "6px 0 0", color: "#4B5563", fontSize: 13 },
   muted: { color: "#6B7280", fontSize: 12 },
 
-  stickyCol: {
-  position: "sticky",
-  left: 0,
-  background: "#FFFFFF",
-  zIndex: 2,
-  boxShadow: "2px 0 0 rgba(0,0,0,0.05)",
-}
-  card: {
+    card: {
     background: "rgba(255,255,255,0.9)",
     border: "1px solid #E5E7EB",
     borderRadius: 16,
