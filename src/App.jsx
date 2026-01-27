@@ -55,18 +55,26 @@ function diffDaysUTC(startISO, finishISO) {
 }
 /* ---------- UI helpers ---------- */
 
-function summaryBorderStyle(item) {
-  if (item.status === "overdue") {
-    return { boxShadow: "inset 4px 0 0 #EF4444" }; // red
-  }
-  if (item.status === "done") {
-    return { boxShadow: "inset 4px 0 0 #10B981" }; // green
-  }
-  if (item.traffic === "amber") {
-    return { boxShadow: "inset 4px 0 0 #F59E0B" }; // amber
-  }
+function summaryBorderStyle(it) {
+  // 1) Not required (if ever shown)
+  if (it.notRequired) return { boxShadow: "inset 4px 0 0 rgba(17,24,39,0.18)" };
+
+  // 2) Overdue always wins
+  if (it.status === "overdue") return { boxShadow: "inset 4px 0 0 #EF4444" };
+
+  // 3) Done wins next
+  if (it.completed || it.status === "done") return { boxShadow: "inset 4px 0 0 #10B981" };
+
+  // 4) First Issue approved (blue)
+  if (it.firstIssueDone) return { boxShadow: "inset 4px 0 0 #2563EB" };
+
+  // 5) Status A approved (amber)
+  if (it.statusADone) return { boxShadow: "inset 4px 0 0 #F59E0B" };
+
+  // default
   return {};
 }
+
 
 /* ---------- schedule model ---------- */
 const ANCHORS = [
