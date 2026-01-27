@@ -372,16 +372,35 @@ Prefer accuracy over brevity.
       }
 
       const input = [
-        { role: "system", content: systemText },
-        { role: "system", content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}` },
-        ...(programmeIndexMatch
-          ? [{ role: "system", content: `PROGRAMME_INDEX_MATCH:\n${JSON.stringify(programmeIndexMatch, null, 2)}` }]
-          : []),
-        ...(searchBackups
-          ? [{ role: "system", content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {}, null, 2)}` }]
-          : []),
-        ...(Array.isArray(messages) ? messages : []),
-      ];
+  // 1️⃣ Core system rules (always first)
+  { role: "system", content: systemText },
+
+  // 2️⃣ 🔒 HARD VERIFICATION GUARD (INSERT HERE)
+  ...(programmeIndexMatch
+    ? [{
+        role: "system",
+        content:
+          `VERIFY_COUNTS: You must output exactly projectCount=${programmeIndexMatch.projectCount} and stageCount=${programmeIndexMatch.stageCount}. If your output contains fewer, it is wrong.`
+      }]
+    : []),
+
+  // 3️⃣ App context (data the model reasons over)
+  {
+    role: "system",
+    content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}`
+  },
+
+  // 4️⃣ Optional backups
+  ...(searchBackups
+    ? [{
+        role: "system",
+        content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {}, null, 2)}`
+      }]
+    : []),
+
+  // 5️⃣ User + assistant messages
+  ...(Array.isArray(messages) ? messages : []),
+];
 
       const r = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
