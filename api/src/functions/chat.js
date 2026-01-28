@@ -94,18 +94,7 @@ function buildIndexFromState(state) {
   const projects = Array.isArray(state?.projects) ? state.projects : [];
 
   // programme: master levels start/finish/duration
-  const programme = projects.flatMap((p) =>
-    (p.master || []).flatMap((m) =>
-      (m.levels || []).map((lv) => ({
-        project: safeStr(p.name),
-        blockZone: safeStr(m.blockZone),
-        level: safeStr(lv.name),
-        startDate: safeStr(lv.startDate),
-        finishDate: safeStr(lv.finishDate),
-        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
-      }))
-    )
-  );
+  return { rows };
 
   // rows: tracker rows (exclude headers + notRequired like your summaryItems)
   const rows = [];
@@ -323,6 +312,13 @@ STRICT RULES:
 - When asked to list items, return ALL matching rows or ask the user to narrow scope.
 - Never guess. If data is missing, say so clearly.
 
+APPROVAL RULES:
+- Approval states are authoritative in rows[].approvalState
+- NEVER infer approval from dates
+- Overdue is rows[].approvalState.overdue
+- Status A approved = rows[].approvalState.statusA === true
+- First Issue approved = rows[].approvalState.firstIssue === true
+
 PROGRAMME RULES (master schedule):
 - Programme questions must use APP_CONTEXT_JSON.programme and APP_CONTEXT_JSON.programmeIndex (not rows).
 - “Start” means programme[].startDate. “Finish” means programme[].finishDate.
@@ -385,8 +381,39 @@ Prefer accuracy over brevity.
         role: "system",
         content:
           `VERIFY_COUNTS: You must output exactly projectCount=${programmeIndexMatch.projectCount} and stageCount=${programmeIndexMatch.stageCount}. If your output contains fewer, it is wrong.`
-      }]
-    : []),
+      ...(programmeIndexMatch
+  ? [{
+      role: "system",
+      content: `
+OUTPUT_FORMAT:
+You MUST respond in pure JSON with this exact shape:
+
+{
+  "month": "${programmeIndexMatch.monthKey}",
+  "projectCount": ${programmeIndexMatch.projectCount},
+  "stageCount": ${programmeIndexMatch.stageCount},
+  "projects": [...],
+  "stages": [
+    {
+      "project": "",
+      "blockZone": "",
+      "level": "",
+      "startDate": "",
+      "finishDate": "",
+      "onSiteRange": ""
+    }
+  ]
+}
+
+RULES:
+- Include EVERY stage from PROGRAMME_INDEX_MATCH.stages
+- Do NOT merge, rename, summarise, or reorder
+- If any item is missing → OUTPUT IS INVALID
+- No prose, no markdown, JSON only
+`
+    }]
+  : []),
+
 
   // 3️⃣ App context (data the model reasons over)
   {
