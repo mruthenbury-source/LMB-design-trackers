@@ -3135,7 +3135,7 @@ const styles = {
 
   tableTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" },
   tableWrap: { overflowX: "auto", WebkitOverflowScrolling: "touch", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
-  table: { width: "100%", borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
+  table: { width: "100%", minWidth: 980, borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
 
   th: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 10px", borderBottom: "1px solid #E5E7EB" },
   td: { padding: "10px 10px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", fontSize: 12 },
