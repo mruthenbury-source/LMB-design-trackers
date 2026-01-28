@@ -1173,42 +1173,45 @@ export default function App() {
               const totalDurationDays = diffDaysUTC(dates.firstIssue, dates.requiredOnSite);
 
               out.push({
-  projectId: proj.id,
-  projectName: proj.name,
-  pageId: pg.id,
-  pageName: pg.name,
-  rowId: r.id,
-  title: r.item || "Unknown",
-  supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
-  requiredOnSite: dates.requiredOnSite || "",
-  statusA: dates.statusA || "",
-  firstIssue: dates.firstIssue || "",
-  anchorKey: r.anchorKey || "N/A",
-  anchorDateISO: r.anchorDateISO || "N/A",
-  daysReqToStatusA: d1 || 0,
-  daysStatusAToFirstIssue: d2 || 0,
-  totalDurationDays: totalDurationDays || 0,
-  timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
-  commentsText: commentsText || "",
-  commentsCount: comments.length || 0,
+              projectId: proj.id,
+              projectName: proj.name,
+              pageId: pg.id,
+              pageName: pg.name,
+              rowId: r.id,
+              title: r.item || "Unknown",
+              supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
+              requiredOnSite: dates.requiredOnSite || "",
+              statusA: dates.statusA || "",
+              firstIssue: dates.firstIssue || "",
+              anchorKey: r.anchorKey || "N/A",
+              anchorDateISO: r.anchorDateISO || "N/A",
+              daysReqToStatusA: d1 || 0,
+              daysStatusAToFirstIssue: d2 || 0,
+              totalDurationDays: totalDurationDays || 0,
+              timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
+              commentsText: commentsText || "",
+              commentsCount: comments.length || 0,
 
-  // tickboxes
-  completed: !!r.completed,
-  notRequired: !!r.notRequired,
-  statusADone: !!r.statusADone,
-  firstIssueDone: !!r.firstIssueDone,
+              // tickboxes
+              completed: !!r.completed,
+              notRequired: !!r.notRequired,
+              statusADone: !!r.statusADone,
+              firstIssueDone: !!r.firstIssueDone,
 
-  // ✅ canonical approval state
-  approvalState: {
-    statusA: !!r.statusADone,
-    firstIssue: !!r.firstIssueDone,
-    completed: !!r.completed,
-    overdue: status === "overdue",
-  },
+              // ✅ canonical approval state
+              approvalState: {
+              statusA: !!r.statusADone,
+              firstIssue: !!r.firstIssueDone,
+              completed: !!r.completed,
+              overdue: status === "overdue",
+              },
 
-  status,
-  traffic,
-});
+              status,
+              traffic,
+              });
+            });
+        });
+    });
 
 
     const rank = { overdue: 0, ongoing: 1, done: 2 };
