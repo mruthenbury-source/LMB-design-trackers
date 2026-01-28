@@ -1,3 +1,4 @@
+function YESNO(b){return b?"YES":"NO";}
 import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
 
@@ -94,7 +95,18 @@ function buildIndexFromState(state) {
   const projects = Array.isArray(state?.projects) ? state.projects : [];
 
   // programme: master levels start/finish/duration
-  return { rows };
+  const programme = projects.flatMap((p) =>
+    (p.master || []).flatMap((m) =>
+      (m.levels || []).map((lv) => ({
+        project: safeStr(p.name),
+        blockZone: safeStr(m.blockZone),
+        level: safeStr(lv.name),
+        startDate: safeStr(lv.startDate),
+        finishDate: safeStr(lv.finishDate),
+        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
+      }))
+    )
+  );
 
   // rows: tracker rows (exclude headers + notRequired like your summaryItems)
   const rows = [];
@@ -143,13 +155,12 @@ function buildIndexFromState(state) {
               daysStatusAToFirstIssue: r.overrideDaysStatusAToFirstIssue ?? null,
 
               // ticks
-              approvalState: {
-              statusA: !!r.statusADone,
-              firstIssue: !!r.firstIssueDone,
-              completed: !!r.completed,
-              overdue: false, // computed later or left false for backups
+              ticks: {
+                statusA: !!r.statusADone,
+                firstIssue: !!r.firstIssueDone,
+                completed: !!r.completed,
+                notRequired: !!r.notRequired,
               },
-
 
               comments: commentsText,
               commentsCount: comments.length,
@@ -313,13 +324,6 @@ STRICT RULES:
 - When asked to list items, return ALL matching rows or ask the user to narrow scope.
 - Never guess. If data is missing, say so clearly.
 
-APPROVAL RULES:
-- Approval states are authoritative in rows[].approvalState
-- NEVER infer approval from dates
-- Overdue is rows[].approvalState.overdue
-- Status A approved = rows[].approvalState.statusA === true
-- First Issue approved = rows[].approvalState.firstIssue === true
-
 PROGRAMME RULES (master schedule):
 - Programme questions must use APP_CONTEXT_JSON.programme and APP_CONTEXT_JSON.programmeIndex (not rows).
 - “Start” means programme[].startDate. “Finish” means programme[].finishDate.
@@ -330,10 +334,6 @@ PROGRAMME RULES (master schedule):
   - Do NOT infer from programme[] when programmeIndex exists
   - If stages are requested, use programmeIndex[YYYY-MM].stages.
   - If PROGRAMME_INDEX_MATCH is present, it is complete and authoritative: use it first and do not omit items.
-  - When PROGRAMME_INDEX_MATCH is present, you MUST:
-  1) State projectCount and stageCount exactly as provided.
-  2) List EVERY project and EVERY stage. Do not summarise or omit.
-  3) If you cannot fit everything, say "OUTPUT_TOO_LONG" and return JSON listing only (no prose).
 
 BACKUPS:
 - If BACKUPS_JSON is present, you may compare snapshots.
@@ -373,73 +373,17 @@ Prefer accuracy over brevity.
       }
 
       const input = [
-  // 1️⃣ Core system rules
-  { role: "system", content: systemText },
+        { role: "system", content: systemText },
+        { role: "system", content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}` },
+        ...(programmeIndexMatch
+          ? [{ role: "system", content: `PROGRAMME_INDEX_MATCH:\n${JSON.stringify(programmeIndexMatch, null, 2)}` }]
+          : []),
+        ...(searchBackups
+          ? [{ role: "system", content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {}, null, 2)}` }]
+          : []),
+        ...(Array.isArray(messages) ? messages : []),
+      ];
 
-  // 2️⃣ Verification guard
-  ...(programmeIndexMatch
-    ? [{
-        role: "system",
-        content:
-          `VERIFY_COUNTS: You must output exactly projectCount=${programmeIndexMatch.projectCount} and stageCount=${programmeIndexMatch.stageCount}. If your output contains fewer, it is wrong.`
-      },
-      {
-        role: "system",
-        content: `
-OUTPUT_FORMAT:
-You MUST respond in pure JSON with this exact shape:
-
-{
-  "month": "${programmeIndexMatch.monthKey}",
-  "projectCount": ${programmeIndexMatch.projectCount},
-  "stageCount": ${programmeIndexMatch.stageCount},
-  "projects": [...],
-  "stages": [
-    {
-      "project": "",
-      "blockZone": "",
-      "level": "",
-      "startDate": "",
-      "finishDate": "",
-      "onSiteRange": ""
-    }
-  ]
-}
-
-RULES:
-- Include EVERY stage from PROGRAMME_INDEX_MATCH.stages
-- Do NOT merge, rename, summarise, or omit
-- If anything is missing → OUTPUT IS INVALID
-- No prose, JSON only
-`
-      }]
-    : []),
-
-  // 3️⃣ App context
-  {
-    role: "system",
-    content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}`
-  },
-
-  // 4️⃣ Optional backups
-  ...(searchBackups
-    ? [{
-        role: "system",
-        content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {}, null, 2)}`
-      }]
-    : []),
-
-  // 5️⃣ Conversation
-  ...(Array.isArray(messages) ? messages : []),
-];
-
-      if (programmeIndexMatch && programmeIndexMatch.stageCount > 0) {
-  input.push({
-    role: "system",
-    content:
-      "FINAL CHECK: If you cannot include ALL stages exactly, reply with OUTPUT_TOO_LONG or DATA_MISMATCH."
-  });
-}
       const r = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
@@ -449,7 +393,7 @@ RULES:
         body: JSON.stringify({
           model,
           input,
-          temperature: 0,
+          temperature: 0.2,
           max_output_tokens: 900,
         }),
       });
