@@ -143,12 +143,13 @@ function buildIndexFromState(state) {
               daysStatusAToFirstIssue: r.overrideDaysStatusAToFirstIssue ?? null,
 
               // ticks
-              ticks: {
-                statusA: !!r.statusADone,
-                firstIssue: !!r.firstIssueDone,
-                completed: !!r.completed,
-                notRequired: !!r.notRequired,
+              approvalState: {
+              statusA: !!r.statusADone,
+              firstIssue: !!r.firstIssueDone,
+              completed: !!r.completed,
+              overdue: false, // computed later or left false for backups
               },
+
 
               comments: commentsText,
               commentsCount: comments.length,
