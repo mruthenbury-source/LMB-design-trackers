@@ -432,7 +432,13 @@ RULES:
   // 5️⃣ User + assistant messages
   ...(Array.isArray(messages) ? messages : []),
 ];
-
+      if (programmeIndexMatch && programmeIndexMatch.stageCount > 0) {
+  input.push({
+    role: "system",
+    content:
+      "FINAL CHECK: If you cannot include ALL stages exactly, reply with OUTPUT_TOO_LONG or DATA_MISMATCH."
+  });
+}
       const r = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
