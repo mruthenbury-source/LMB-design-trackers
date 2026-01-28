@@ -1205,8 +1205,18 @@ export default function App() {
               completed: !!r.completed,
               overdue: status === "overdue",
               },
+                searchText: [
+                proj.name,
+                pg.name,
+                r.item,
+                supplierByRespId.get(pg.meta?.responsibilityId),
+                `statusA:${!!r.statusADone}`,
+                `firstIssue:${!!r.firstIssueDone}`,
+                `completed:${!!r.completed}`,
+                `overdue:${status === "overdue"}`,
+                ].filter(Boolean).join(" | "),
 
-              status,
+                status,
               traffic,
               });
             });
