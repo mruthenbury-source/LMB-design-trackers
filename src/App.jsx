@@ -1173,45 +1173,43 @@ export default function App() {
               const totalDurationDays = diffDaysUTC(dates.firstIssue, dates.requiredOnSite);
 
               out.push({
-                projectId: proj.id,
-                projectName: proj.name,
-                pageId: pg.id,
-                pageName: pg.name,
-                rowId: r.id,
-                title: r.item || "Unknown",  // Safeguard for missing item/title
-                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
-                requiredOnSite: dates.requiredOnSite || "",
-                statusA: dates.statusA || "",
-                firstIssue: dates.firstIssue || "",
-                anchorKey: r.anchorKey || "N/A",  // Safeguard
-                anchorDateISO: r.anchorDateISO || "N/A",  // Safeguard
-                daysReqToStatusA: d1 || 0,  // Default to 0 if undefined
-                daysStatusAToFirstIssue: d2 || 0,  // Default to 0 if undefined
-                totalDurationDays: totalDurationDays || 0,  // Default to 0 if undefined
-                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
-                commentsText: commentsText || "No comments",  // Safeguard for empty comments
-                commentsCount: comments.length || 0,  // Default to 0 if no comments
-              
-                // ✅ tickboxes (for chat search)
-                completed: !!r.completed,  // Ensure it's a boolean (if it's missing, it'll be false)
-                notRequired: !!r.notRequired, // Will always be false if missing
-                statusADone: !!r.statusADone,  // Ensure it's a boolean
-                firstIssueDone: !!r.firstIssueDone,  // Ensure it's a boolean
-                
-                // ✅ NEW: canonical approval state (chat + UI + summary)
-                approvalState: {
-                statusA: !!x.statusADone,
-                firstIssue: !!x.firstIssueDone,
-                completed: !!x.completed,
-                overdue: x.status === "overdue",
-                },
+  projectId: proj.id,
+  projectName: proj.name,
+  pageId: pg.id,
+  pageName: pg.name,
+  rowId: r.id,
+  title: r.item || "Unknown",
+  supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
+  requiredOnSite: dates.requiredOnSite || "",
+  statusA: dates.statusA || "",
+  firstIssue: dates.firstIssue || "",
+  anchorKey: r.anchorKey || "N/A",
+  anchorDateISO: r.anchorDateISO || "N/A",
+  daysReqToStatusA: d1 || 0,
+  daysStatusAToFirstIssue: d2 || 0,
+  totalDurationDays: totalDurationDays || 0,
+  timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
+  commentsText: commentsText || "",
+  commentsCount: comments.length || 0,
 
-                status,
-                traffic,
-              });
-            });
-        });
-    });
+  // tickboxes
+  completed: !!r.completed,
+  notRequired: !!r.notRequired,
+  statusADone: !!r.statusADone,
+  firstIssueDone: !!r.firstIssueDone,
+
+  // ✅ canonical approval state
+  approvalState: {
+    statusA: !!r.statusADone,
+    firstIssue: !!r.firstIssueDone,
+    completed: !!r.completed,
+    overdue: status === "overdue",
+  },
+
+  status,
+  traffic,
+});
+
 
     const rank = { overdue: 0, ongoing: 1, done: 2 };
     out.sort((a, b) => {
