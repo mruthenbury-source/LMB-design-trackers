@@ -229,7 +229,7 @@ app.http("chat", {
       const searchBackups = !!body?.searchBackups;
 
       const apiKey = process.env.OPENAI_API_KEY;
-      const model = process.env.OPENAI_MODEL || "gpt-4.1";
+      const model = process.env.OPENAI_MODEL || "gpt-4o";
 
       if (!apiKey) {
         return {
