@@ -229,7 +229,7 @@ app.http("chat", {
       const searchBackups = !!body?.searchBackups;
 
       const apiKey = process.env.OPENAI_API_KEY;
-      const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+      const model = process.env.OPENAI_MODEL || "gpt-4.1";
 
       if (!apiKey) {
         return {
@@ -448,7 +448,7 @@ RULES:
         body: JSON.stringify({
           model,
           input,
-          temperature: 0.2,
+          temperature: 0,
           max_output_tokens: 900,
         }),
       });
