@@ -2035,58 +2035,59 @@ return {
                     </tr>
                   </thead>
                   <tbody>
-  {filteredSummary.map((it) => (
-    <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`} style={styles.trBase}>
-             style={{
-          ...(it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined),
-  }}
->
+  {filteredSummary.map((it) => {
+    const stripe = summaryBorderColor(it);
+
+    return (
+      <tr
+        key={`${it.projectId}:${it.pageId}:${it.rowId}`}
+        style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
+      >
         <td
-  style={{
-    ...styles.td,
-    background: (() => {
-      const stripe = summaryBorderColor(it); // <- add helper below
-      // Draw a 4px stripe on the left, rest stays white
-      return `linear-gradient(90deg, ${stripe} 0 4px, #FFFFFF 4px 100%)`;
-    })(),
-  }}
->
-  <StatusBadge status={it.status} />
-</td>
+          style={{
+            ...styles.td,
+            // Paint a 4px stripe on the left inside the cell (table-safe)
+            backgroundImage: `linear-gradient(90deg, ${stripe} 0 4px, transparent 4px 100%)`,
+            backgroundRepeat: "no-repeat",
+          }}
+        >
+          <StatusBadge status={it.status} />
+        </td>
 
+        <td style={styles.tdCenter}>
+          <TrafficDot status={it.traffic} />
+        </td>
+        <td style={styles.td}>{it.projectName}</td>
+        <td style={styles.td}>{it.pageName}</td>
+        <td style={styles.td}>{it.supplier || "—"}</td>
+        <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
+        <td style={styles.td}>
+          <div style={styles.pillCompact}>{it.requiredOnSite || "—"}</div>
+        </td>
+        <td style={styles.td}>
+          <div style={styles.pillCompact}>{it.statusA || "—"}</div>
+        </td>
+        <td style={styles.td}>
+          <div style={styles.pillCompact}>{it.firstIssue || "—"}</div>
+        </td>
+        <td style={styles.td}>
+          <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
+            Open
+          </button>
+        </td>
+      </tr>
+    );
+  })}
 
-      <td style={styles.tdCenter}>
-        <TrafficDot status={it.traffic} />
-      </td>
-      <td style={styles.td}>{it.projectName}</td>
-      <td style={styles.td}>{it.pageName}</td>
-      <td style={styles.td}>{it.supplier || "—"}</td>
-      <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
-      <td style={styles.td}>
-        <div style={styles.pillCompact}>{it.requiredOnSite || "—"}</div>
-      </td>
-      <td style={styles.td}>
-        <div style={styles.pillCompact}>{it.statusA || "—"}</div>
-      </td>
-      <td style={styles.td}>
-        <div style={styles.pillCompact}>{it.firstIssue || "—"}</div>
-      </td>
-      <td style={styles.td}>
-        <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
-          Open
-        </button>
-      </td>
-    </tr>
-  ))}
-
-  {!filteredSummary.length && (
+  {!filteredSummary.length ? (
     <tr>
       <td style={styles.td} colSpan={10}>
         <div style={{ color: "#6B7280" }}>No items.</div>
       </td>
     </tr>
-  )}
+  ) : null}
 </tbody>
+
 
                 </table>
               </div>
