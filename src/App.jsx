@@ -75,6 +75,22 @@ function summaryBorderColor(it) {
   return "#E5E7EB";                                 // neutral
 }
 
+function datePillStyle({ row, dateKey }) {
+  // Not required always grey
+  if (row.notRequired) return styles.pillMuted;
+
+  // Completed overrides everything
+  if (row.completed) return styles.pillDone;
+
+  // Specific ticked milestones
+  if (dateKey === "statusA" && row.statusADone) return styles.pillDone;
+  if (dateKey === "firstIssue" && row.firstIssueDone) return styles.pillDone;
+
+  // Late logic (same as tracker)
+  if (row.status === "overdue") return styles.pillLate;
+
+  return styles.pillNeutral;
+}
 
 
 /* ---------- schedule model ---------- */
@@ -2062,14 +2078,23 @@ return {
         <td style={styles.td}>{it.supplier || "—"}</td>
         <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
         <td style={styles.td}>
-          <div style={styles.pillCompact}>{it.requiredOnSite || "—"}</div>
-        </td>
-        <td style={styles.td}>
-          <div style={styles.pillCompact}>{it.statusA || "—"}</div>
-        </td>
-        <td style={styles.td}>
-          <div style={styles.pillCompact}>{it.firstIssue || "—"}</div>
-        </td>
+  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "requiredOnSite" }) }}>
+    {it.requiredOnSite || "—"}
+  </div>
+</td>
+
+<td style={styles.td}>
+  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "statusA" }) }}>
+    {it.statusA || "—"}
+  </div>
+</td>
+
+<td style={styles.td}>
+  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "firstIssue" }) }}>
+    {it.firstIssue || "—"}
+  </div>
+</td>
+
         <td style={styles.td}>
           <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
             Open
