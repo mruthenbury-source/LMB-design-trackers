@@ -240,7 +240,7 @@ app.http("chat", {
       const searchBackups = !!body?.searchBackups;
 
       const apiKey = process.env.OPENAI_API_KEY;
-      const model = process.env.OPENAI_MODEL || "gpt-5.2-thinking";
+      const model = process.env.OPENAI_MODEL || "gpt-5.2";
 
       if (!apiKey) {
         return {
