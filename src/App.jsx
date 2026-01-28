@@ -1197,6 +1197,14 @@ export default function App() {
                 notRequired: !!r.notRequired, // Will always be false if missing
                 statusADone: !!r.statusADone,  // Ensure it's a boolean
                 firstIssueDone: !!r.firstIssueDone,  // Ensure it's a boolean
+                
+                // ✅ NEW: canonical approval state (chat + UI + summary)
+                approvalState: {
+                statusA: !!x.statusADone,
+                firstIssue: !!x.firstIssueDone,
+                completed: !!x.completed,
+                overdue: x.status === "overdue",
+                },
 
                 status,
                 traffic,
