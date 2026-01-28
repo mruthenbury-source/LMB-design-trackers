@@ -56,11 +56,13 @@ function diffDaysUTC(startISO, finishISO) {
 /* ---------- UI helpers ---------- */
 
 function summaryBorderStyle(it) {
-  if (it.status === "overdue") return "4px solid #EF4444";     // red
-  if (it.completed) return "4px solid #10B981";               // green
-  if (it.firstIssueDone) return "4px solid #2563EB";          // blue
-  if (it.statusADone) return "4px solid #F59E0B";             // amber
-  return "4px solid transparent";
+  // Mirror the tracker row intent (late / Status A approved / First Issue issued / Done).
+  // Return a COLOR only (we apply it via inset boxShadow for reliable table rendering).
+  if (it.status === "overdue") return "#EF4444";      // red (late)
+  if (it.completed) return "#10B981";                 // green (done)
+  if (it.firstIssueDone) return "#2563EB";            // blue (first issue)
+  if (it.statusADone) return "#F59E0B";               // amber (status A)
+  return "transparent";
 }
 
 
@@ -2027,7 +2029,8 @@ return {
       <td
         style={{
           ...styles.td,
-          borderLeft: summaryBorderStyle(it),
+          boxShadow: `inset 4px 0 0 ${summaryBorderStyle(it)}`,
+          borderLeft: "none",
           paddingLeft: 10,
         }}
       >
@@ -3098,6 +3101,8 @@ const styles = {
   thTf: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 8px", borderBottom: "1px solid #E5E7EB", width: 120 },
 
   tdCenter: { padding: "10px 8px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", textAlign: "center" },
+
+  trBase: {},
 
   trHeader: { background: "#F9FAFB" },
   trLate: { background: "#FEF2F2" },
