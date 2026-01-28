@@ -65,6 +65,17 @@ function summaryBorderStyle(it) {
   return "transparent";
 }
 
+function summaryBorderColor(it) {
+  // Match tracker intent / priority
+  if (it.notRequired) return "rgba(17,24,39,0.25)"; // “Not required” muted stripe
+  if (it.status === "overdue") return "#EF4444";    // overdue red
+  if (it.completed) return "#10B981";               // done green
+  if (it.firstIssueDone) return "#2563EB";          // first issue ticked blue
+  if (it.statusADone) return "#F59E0B";             // Status A ticked amber
+  return "#E5E7EB";                                 // neutral
+}
+
+
 
 /* ---------- schedule model ---------- */
 const ANCHORS = [
@@ -2026,16 +2037,23 @@ return {
                   <tbody>
   {filteredSummary.map((it) => (
     <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`} style={styles.trBase}>
-      <td
-        style={{
-          ...styles.td,
-          boxShadow: `inset 4px 0 0 ${summaryBorderStyle(it)}`,
-          borderLeft: "none",
-          paddingLeft: 10,
-        }}
-      >
-        <StatusBadge status={it.status} />
-      </td>
+             style={{
+          ...(it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined),
+  }}
+>
+        <td
+  style={{
+    ...styles.td,
+    background: (() => {
+      const stripe = summaryBorderColor(it); // <- add helper below
+      // Draw a 4px stripe on the left, rest stays white
+      return `linear-gradient(90deg, ${stripe} 0 4px, #FFFFFF 4px 100%)`;
+    })(),
+  }}
+>
+  <StatusBadge status={it.status} />
+</td>
+
 
       <td style={styles.tdCenter}>
         <TrafficDot status={it.traffic} />
