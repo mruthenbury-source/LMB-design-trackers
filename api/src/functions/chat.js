@@ -372,19 +372,19 @@ Prefer accuracy over brevity.
       }
 
       const input = [
-  // 1️⃣ Core system rules (always first)
+  // 1️⃣ Core system rules
   { role: "system", content: systemText },
 
-  // 2️⃣ 🔒 HARD VERIFICATION GUARD (INSERT HERE)
+  // 2️⃣ Verification guard
   ...(programmeIndexMatch
     ? [{
         role: "system",
         content:
           `VERIFY_COUNTS: You must output exactly projectCount=${programmeIndexMatch.projectCount} and stageCount=${programmeIndexMatch.stageCount}. If your output contains fewer, it is wrong.`
-      ...(programmeIndexMatch
-  ? [{
-      role: "system",
-      content: `
+      },
+      {
+        role: "system",
+        content: `
 OUTPUT_FORMAT:
 You MUST respond in pure JSON with this exact shape:
 
@@ -407,15 +407,14 @@ You MUST respond in pure JSON with this exact shape:
 
 RULES:
 - Include EVERY stage from PROGRAMME_INDEX_MATCH.stages
-- Do NOT merge, rename, summarise, or reorder
-- If any item is missing → OUTPUT IS INVALID
-- No prose, no markdown, JSON only
+- Do NOT merge, rename, summarise, or omit
+- If anything is missing → OUTPUT IS INVALID
+- No prose, JSON only
 `
-    }]
-  : []),
+      }]
+    : []),
 
-
-  // 3️⃣ App context (data the model reasons over)
+  // 3️⃣ App context
   {
     role: "system",
     content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}`
@@ -429,9 +428,10 @@ RULES:
       }]
     : []),
 
-  // 5️⃣ User + assistant messages
+  // 5️⃣ Conversation
   ...(Array.isArray(messages) ? messages : []),
 ];
+
       if (programmeIndexMatch && programmeIndexMatch.stageCount > 0) {
   input.push({
     role: "system",
