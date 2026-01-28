@@ -1827,7 +1827,7 @@ return {
                 <button style={styles.secondaryBtn} onClick={goToProject}>
                   Go to Project
                 </button>
-              </div>
+              
               <button
   style={styles.dangerBtn}
   onClick={() => {
@@ -1837,7 +1837,7 @@ return {
       `Are you sure you want to remove "${activeProject.name}"?\n\n` +
       `This cannot be undone.\n\n` +
       `If a backup exists from before the last save, the project can be recovered from backup.`
-    );
+    );    
 
     if (!ok) return;
 
@@ -1849,6 +1849,7 @@ return {
 >
   Remove Project
 </button>
+                </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
                 <button
