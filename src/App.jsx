@@ -57,18 +57,34 @@ function diffDaysUTC(startISO, finishISO) {
 
 
 function datePillStyle({ row, dateKey }) {
-  // Not required always grey
+  // Not required → always muted
   if (row.notRequired) return styles.pillMuted;
 
-  // Completed overrides everything
+  // Completed row → everything green
   if (row.completed) return styles.pillDone;
 
-  // Specific ticked milestones
+  // Extract the actual date for this pill
+  const dateISO = row[dateKey];
+  const date = parseISO(dateISO);
+  if (!date) return styles.pillNeutral;
+
+  const today = parseISO(isoToday());
+  const daysLeft = Math.ceil((date.getTime() - today.getTime()) / dayMs());
+
+  // Ticked milestones
   if (dateKey === "statusA" && row.statusADone) return styles.pillDone;
   if (dateKey === "firstIssue" && row.firstIssueDone) return styles.pillDone;
 
+  // 🔴 Late (date-specific)
+  if (daysLeft < 0) return styles.pillLate;
+
+  // 🟠 Due soon (< 7 days)
+  if (daysLeft <= 7) return styles.pillAmber;
+
+  // Default
   return styles.pillNeutral;
 }
+
 
 
 /* ---------- schedule model ---------- */
