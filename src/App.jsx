@@ -79,7 +79,7 @@ function datePillStyle({ row, dateKey }) {
   if (daysLeft < 0) return styles.pillLate;
 
   // 🟠 Due soon (< 7 days)
-  if (daysLeft <= 7) return styles.pillAmber;
+  if (daysLeft <= 7) return styles.pillDueSoon;
 
   // Default
   return styles.pillNeutral;
