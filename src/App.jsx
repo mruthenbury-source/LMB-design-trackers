@@ -1996,112 +1996,116 @@ return {
             </div>
 
             <div style={styles.card}>
-              <div style={styles.tableTop}>
-                <div style={{ display: "grid", gap: 8 }}>
-                  <TrafficKeyDotsOnly />
+  <div style={styles.tableTop}>
+    <div style={{ display: "grid", gap: 8 }}>
+      {/* If you want to REMOVE the dot legend too, delete this line */}
+      <TrafficKeyDotsOnly />
 
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
-                      Project
-                      <select style={{ ...styles.input, width: 220 }} value={summaryProjectId} onChange={(e) => setSummaryProjectId(e.target.value)}>
-                        <option value="all">All projects</option>
-                        {projects.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
+          Project
+          <select
+            style={{ ...styles.input, width: 220 }}
+            value={summaryProjectId}
+            onChange={(e) => setSummaryProjectId(e.target.value)}
+          >
+            <option value="all">All projects</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
-                    <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
-                      Supplier
-                      <select style={{ ...styles.input, width: 220 }} value={summarySupplier} onChange={(e) => setSummarySupplier(e.target.value)}>
-                        <option value="all">All suppliers</option>
-                        {supplierOptions.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                </div>
-
-                
-              <div style={styles.tableWrap}>
-                <table style={styles.table}>
-                  <thead>
-                    <tr>
-                      <th style={styles.th}>●</th>
-                      <th style={styles.th}>Project</th>
-                      <th style={styles.th}>Responsibility</th>
-                      <th style={styles.th}>Supplier</th>
-                      <th style={styles.th}>Item</th>
-                      <th style={styles.th}>Req</th>
-                      <th style={styles.th}>Status A</th>
-                      <th style={styles.th}>First</th>
-                      <th style={styles.th}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-  {filteredSummary.map((it) => {
-    const stripe = summaryBorderColor(it);
-
-    return (
-      <tr
-        key={`${it.projectId}:${it.pageId}:${it.rowId}`}
-        style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
-      >
-        
-        <td style={styles.tdCenter}>
-          <TrafficDot status={it.traffic} />
-        </td>
-        <td style={styles.td}>{it.projectName}</td>
-        <td style={styles.td}>{it.pageName}</td>
-        <td style={styles.td}>{it.supplier || "—"}</td>
-        <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
-        <td style={styles.td}>
-  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "requiredOnSite" }) }}>
-    {it.requiredOnSite || "—"}
+        <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
+          Supplier
+          <select
+            style={{ ...styles.input, width: 220 }}
+            value={summarySupplier}
+            onChange={(e) => setSummarySupplier(e.target.value)}
+          >
+            <option value="all">All suppliers</option>
+            {supplierOptions.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    </div>
   </div>
-</td>
 
-<td style={styles.td}>
-  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "statusA" }) }}>
-    {it.statusA || "—"}
-  </div>
-</td>
+  <div style={styles.tableWrap}>
+    <table style={styles.table}>
+      <thead>
+        <tr>
+          <th style={styles.th}>●</th>
+          <th style={styles.th}>Project</th>
+          <th style={styles.th}>Responsibility</th>
+          <th style={styles.th}>Supplier</th>
+          <th style={styles.th}>Item</th>
+          <th style={styles.th}>Req</th>
+          <th style={styles.th}>Status A</th>
+          <th style={styles.th}>First</th>
+          <th style={styles.th}></th>
+        </tr>
+      </thead>
 
-<td style={styles.td}>
-  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "firstIssue" }) }}>
-    {it.firstIssue || "—"}
-  </div>
-</td>
+      <tbody>
+        {filteredSummary.map((it) => (
+          <tr
+            key={`${it.projectId}:${it.pageId}:${it.rowId}`}
+            style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
+          >
+            <td style={styles.tdCenter}>
+              <TrafficDot status={it.traffic} />
+            </td>
 
-        <td style={styles.td}>
-          <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
-            Open
-          </button>
-        </td>
-      </tr>
-    );
-  })}
+            <td style={styles.td}>{it.projectName}</td>
+            <td style={styles.td}>{it.pageName}</td>
+            <td style={styles.td}>{it.supplier || "—"}</td>
+            <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
 
-  {!filteredSummary.length ? (
-    <tr>
-      <td style={styles.td} colSpan={10}>
-        <div style={{ color: "#6B7280" }}>No items.</div>
-      </td>
-    </tr>
-  ) : null}
-</tbody>
-
-
-                </table>
+            <td style={styles.td}>
+              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "requiredOnSite" }) }}>
+                {it.requiredOnSite || "—"}
               </div>
-            </div>
-          </div>
-        </div>
+            </td>
+
+            <td style={styles.td}>
+              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "statusA" }) }}>
+                {it.statusA || "—"}
+              </div>
+            </td>
+
+            <td style={styles.td}>
+              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "firstIssue" }) }}>
+                {it.firstIssue || "—"}
+              </div>
+            </td>
+
+            <td style={styles.td}>
+              <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
+                Open
+              </button>
+            </td>
+          </tr>
+        ))}
+
+        {!filteredSummary.length ? (
+          <tr>
+            <td style={styles.td} colSpan={9}>
+              <div style={{ color: "#6B7280" }}>No items.</div>
+            </td>
+          </tr>
+        ) : null}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 
         {!isGuest && (
           <ChatOverlay
