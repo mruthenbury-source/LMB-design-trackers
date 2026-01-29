@@ -2055,10 +2055,8 @@ return {
 
       <tbody>
         {filteredSummary.map((it) => (
-          <tr
-            key={`${it.projectId}:${it.pageId}:${it.rowId}`}
-            style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
-          >
+          <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`}>
+
             <td style={styles.tdCenter}>
               <TrafficDot status={it.traffic} />
             </td>
