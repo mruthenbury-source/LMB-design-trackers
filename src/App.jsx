@@ -2027,14 +2027,7 @@ return {
                   </div>
                 </div>
 
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <FilterPill label="Overdue" active={summaryFilter === "overdue"} onClick={() => setSummaryFilter("overdue")} />
-                  <FilterPill label="Ongoing" active={summaryFilter === "ongoing"} onClick={() => setSummaryFilter("ongoing")} />
-                  <FilterPill label="Done" active={summaryFilter === "done"} onClick={() => setSummaryFilter("done")} />
-                  <FilterPill label="All" active={summaryFilter === "all"} onClick={() => setSummaryFilter("all")} />
-                </div>
-              </div>
-
+                
               <div style={styles.tableWrap}>
                 <table style={styles.table}>
                   <thead>
