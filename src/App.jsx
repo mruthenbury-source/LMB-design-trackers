@@ -2105,6 +2105,8 @@ return {
     </table>
   </div>
 </div>
+            </div>
+          </div>
 
 
         {!isGuest && (
