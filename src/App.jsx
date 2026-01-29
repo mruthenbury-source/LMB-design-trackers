@@ -3156,6 +3156,7 @@ const styles = {
   pillCompact: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, border: "1px solid #E5E7EB", fontSize: 12, background: "#FFFFFF", whiteSpace: "nowrap" },
   pillEmpty: { color: "#9CA3AF", background: "#FAFAFA" },
   pillLate: { border: "1px solid #EF4444" },
+  pillDueSoon: { border: "1px solid #F59E0B" },
   pillDone: { border: "1px solid #10B981" },
   pillMuted: { background: "#F3F4F6", color: "#6B7280" },
   pillLocked: { background: "#F3F4F6", color: "#111827" },
