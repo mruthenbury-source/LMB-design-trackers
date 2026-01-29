@@ -55,6 +55,26 @@ function diffDaysUTC(startISO, finishISO) {
 }
 /* ---------- UI helpers ---------- */
 
+function summaryBorderStyle(it) {
+  // Mirror the tracker row intent (late / Status A approved / First Issue issued / Done).
+  // Return a COLOR only (we apply it via inset boxShadow for reliable table rendering).
+  if (it.status === "overdue") return "#EF4444";      // red (late)
+  if (it.completed) return "#10B981";                 // green (done)
+  if (it.firstIssueDone) return "#2563EB";            // blue (first issue)
+  if (it.statusADone) return "#F59E0B";               // amber (status A)
+  return "transparent";
+}
+
+function summaryBorderColor(it) {
+  // Match tracker intent / priority
+  if (it.notRequired) return "rgba(17,24,39,0.25)"; // “Not required” muted stripe
+  if (it.status === "overdue") return "#EF4444";    // overdue red
+  if (it.completed) return "#10B981";               // done green
+  if (it.firstIssueDone) return "#2563EB";          // first issue ticked blue
+  if (it.statusADone) return "#F59E0B";             // Status A ticked amber
+  return "#E5E7EB";                                 // neutral
+}
+
 function datePillStyle({ row, dateKey }) {
   // Not required always grey
   if (row.notRequired) return styles.pillMuted;
@@ -2038,6 +2058,8 @@ return {
                 <table style={styles.table}>
                   <thead>
                     <tr>
+                      <th style={styles.th}>Status</th>
+                      <th style={styles.th}>●</th>
                       <th style={styles.th}>Project</th>
                       <th style={styles.th}>Responsibility</th>
                       <th style={styles.th}>Supplier</th>
@@ -2057,6 +2079,20 @@ return {
         key={`${it.projectId}:${it.pageId}:${it.rowId}`}
         style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
       >
+        <td
+          style={{
+            ...styles.td,
+            // Paint a 4px stripe on the left inside the cell (table-safe)
+            backgroundImage: `linear-gradient(90deg, ${stripe} 0 4px, transparent 4px 100%)`,
+            backgroundRepeat: "no-repeat",
+          }}
+        >
+          <StatusBadge status={it.status} />
+        </td>
+
+        <td style={styles.tdCenter}>
+          <TrafficDot status={it.traffic} />
+        </td>
         <td style={styles.td}>{it.projectName}</td>
         <td style={styles.td}>{it.pageName}</td>
         <td style={styles.td}>{it.supplier || "—"}</td>
