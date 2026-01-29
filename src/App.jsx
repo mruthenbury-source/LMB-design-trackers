@@ -67,9 +67,6 @@ function datePillStyle({ row, dateKey }) {
   if (dateKey === "statusA" && row.statusADone) return styles.pillDone;
   if (dateKey === "firstIssue" && row.firstIssueDone) return styles.pillDone;
 
-  // Late logic (same as tracker)
-  if (row.status === "overdue") return styles.pillLate;
-
   return styles.pillNeutral;
 }
 
