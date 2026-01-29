@@ -1,6 +1,10 @@
 {
   "routes": [
     {
+  "route": "/login",
+  "redirect": "/.auth/login/aad"
+}
+    {
       "route": "/api/state",
       "allowedRoles": ["anonymous", "authenticated"]
     },
