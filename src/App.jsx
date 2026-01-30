@@ -2214,6 +2214,12 @@ return {
       <div style={styles.shell}>
         <ProjectView
           projects={projects}
+          isManager={isManager}
+          isTeam={isTeam}
+          canTickDone={canTickDone}
+          canEditMasterDates={canEditMasterDates}
+          canComment={canComment}
+          noPermission={noPermission}
           visibleProjects={visibleProjects}
           activeProjectId={activeProjectId}
           activePageId={activePageId}
@@ -2284,6 +2290,12 @@ function ProjectView(props) {
     authUser,
     isAdmin,
     isGuest,
+    isManager,
+    isTeam,
+    canTickDone,
+    canEditMasterDates,
+    canComment,
+    noPermission,
     hasSupplierAccess,
     setActiveProjectId,
     setActivePageId,
