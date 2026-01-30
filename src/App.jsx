@@ -1022,12 +1022,12 @@ function pushAudit(action, meta) {
       master: (activeProject.master || []).map((m) => (m.id === masterId ? { ...m, ...patch } : m)),
     });
   }
-  \1
+  
     if (!isAdmin) return noPermission();
     const next = (activeProject.master || []).filter((m) => m.id !== masterId);
     updateProject(activeProject.id, { master: next.length ? next : [defaultMasterRow()] });
   }
-  \1
+  
     if (!isAdmin) return noPermission();
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
@@ -1054,7 +1054,7 @@ function pushAudit(action, meta) {
     });
     updateProject(activeProject.id, { master: next });
   }
-  \1
+  
     if (!isAdmin) return noPermission();
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
@@ -1064,7 +1064,7 @@ function pushAudit(action, meta) {
     updateProject(activeProject.id, { master: next });
   }
 
-  \1
+  
     if (!isAdmin) return noPermission();
     updateProject(activeProject.id, {
       responsibilities: [...(activeProject.responsibilities || []), defaultResponsibility()],
@@ -1076,7 +1076,7 @@ function pushAudit(action, meta) {
       responsibilities: (activeProject.responsibilities || []).map((r) => (r.id === respId ? { ...r, ...patch } : r)),
     });
   }
-  \1
+  
     if (!isAdmin) return noPermission();
     const remaining = (activeProject.responsibilities || []).filter((r) => r.id !== respId);
     updateProject(activeProject.id, { responsibilities: remaining.length ? remaining : [defaultResponsibility()] });
