@@ -2307,47 +2307,34 @@ function ProjectView(props) {
   }, [isGuest, activeProject, activePage, allowedPages, setActivePageId]);
 
   // Comments modal state (append-only; each saved comment is locked)
-  // Supports BOTH tracker rows and Project Home (master level) rows.
-  const [commentTarget, setCommentTarget] = useState(null);
+  const [commentRowId, setCommentRowId] = useState(null);
   const [commentName, setCommentName] = useState("");
   const [commentText, setCommentText] = useState("");
 
-  const trackerCommentRow = useMemo(() => {
-    if (!commentTarget || commentTarget.type !== "tracker") return null;
-    const rows = activePage?.rows || [];
-    return rows.find((r) => r.id === commentTarget.rowId) || null;
-  }, [commentTarget, activePage]);
+  // Project Home comments (append-only)
+  const [homeCommentName, setHomeCommentName] = useState("");
+  const [homeCommentText, setHomeCommentText] = useState("");
 
-  const homeCommentLevel = useMemo(() => {
-    if (!commentTarget || commentTarget.type !== "home") return null;
-    const m = (activeProject?.master || []).find((x) => x.id === commentTarget.masterId);
-    const lv = (m?.levels || []).find((x) => x.id === commentTarget.levelId);
-    if (!m || !lv) return null;
-    return { master: m, level: lv };
-  }, [commentTarget, activeProject]);
+  const commentRow = useMemo(() => {
+    if (!commentRowId) return null;
+    const rows = activePage?.rows || [];
+    return rows.find((r) => r.id === commentRowId) || null;
+  }, [commentRowId, activePage]);
 
   function openComments(row) {
     if (!row || row.kind === "header") return;
-    setCommentTarget({ type: "tracker", rowId: row.id });
-    setCommentName(authUser?.userDetails || "");
-    setCommentText("");
-  }
-
-  function openHomeComments(masterId, levelId) {
-    if (!masterId || !levelId) return;
-    setCommentTarget({ type: "home", masterId, levelId });
+    setCommentRowId(row.id);
     setCommentName(authUser?.userDetails || "");
     setCommentText("");
   }
 
   function closeComments() {
-    setCommentTarget(null);
+    setCommentRowId(null);
     setCommentText("");
   }
 
   function saveComment() {
-    if (!commentTarget) return;
-
+    if (!commentRow) return;
     const name = clean(commentName) || (authUser?.userDetails || authUser?.userId || "guest");
     const text = clean(commentText);
     if (!text) return;
@@ -2362,26 +2349,33 @@ function ProjectView(props) {
       lockedAt: new Date().toISOString(),
     };
 
-    // Tracker rows: existing behaviour (guests can comment)
-    if (commentTarget.type === "tracker") {
-      if (!trackerCommentRow) return;
-      updateRow(trackerCommentRow.id, {
-        comments: [...(Array.isArray(trackerCommentRow.comments) ? trackerCommentRow.comments : []), next],
-      });
-      setCommentText("");
-      return;
-    }
+    updateRow(commentRow.id, {
+      comments: [...(Array.isArray(commentRow.comments) ? commentRow.comments : []), next],
+    });
 
-    // Project Home level rows: Admin/Manager/Team can comment, guests cannot.
-    if (commentTarget.type === "home") {
-      if (!homeCommentLevel) return;
-      if (isGuest) return deny();
+    setCommentText("");
+  }
 
-      const { master, level } = homeCommentLevel;
-      const prev = Array.isArray(level.comments) ? level.comments : [];
-      updateLevel(master.id, level.id, { comments: [...prev, next] });
-      setCommentText("");
-    }
+  function saveHomeComment() {
+    if (!activeProject) return;
+    if (isGuest) return deny();
+    const name = clean(homeCommentName) || (authUser?.userDetails || authUser?.userId || "guest");
+    const text = clean(homeCommentText);
+    if (!text) return;
+
+    const next = {
+      id: uid(),
+      name,
+      dateISO: isoToday(),
+      text,
+      locked: true,
+      lockedBy: authUser?.userDetails || authUser?.userId || "guest",
+      lockedAt: new Date().toISOString(),
+    };
+
+    const prev = Array.isArray(activeProject.homeComments) ? activeProject.homeComments : [];
+    updateProject(activeProject.id, { homeComments: [...prev, next] });
+    setHomeCommentText("");
   }
 
   // Guest: if they land on Project Home, push them to their first allowed tracker page
@@ -2631,7 +2625,6 @@ function tickMilestone(row, field, checked) {
                     <th style={styles.th}>Start</th>
                     <th style={styles.th}>Finish</th>
                     <th style={styles.th}>Duration</th>
-                    <th style={styles.th}>Comments</th>
                     <th style={styles.th}></th>
                   </tr>
                 </thead>
@@ -2722,16 +2715,6 @@ function tickMilestone(row, field, checked) {
                                   {safeDur == null ? "—" : `${safeDur}d`}
                                 </div>
                               </div>
-                            </td>
-
-                            <td style={styles.tdCenter}>
-                              <button
-                                style={styles.smallBtn}
-                                onClick={() => openHomeComments(m.id, lv.id)}
-                                title="Add/view comments"
-                              >
-                                💬 {Array.isArray(lv.comments) && lv.comments.length ? lv.comments.length : ""}
-                              </button>
                             </td>
 
                             <td style={styles.td}>
@@ -3143,7 +3126,7 @@ function tickMilestone(row, field, checked) {
         </div>
       )}
 
-      {commentTarget ? (
+      {commentRowId ? (
         <div style={styles.modalOverlay} onMouseDown={closeComments}>
           <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
@@ -3154,86 +3137,60 @@ function tickMilestone(row, field, checked) {
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>
-              {(() => {
-                const isHome = commentTarget.type === "home";
-                const canAdd = commentTarget.type === "tracker" ? true : !isGuest;
+              <div style={styles.muted}>Row: {commentRow?.item || "—"}</div>
 
-                const rowLabel = isHome
-                  ? `${homeCommentLevel?.master?.blockZone || "—"} — ${homeCommentLevel?.level?.name || "—"}`
-                  : `${trackerCommentRow?.item || "—"}`;
-
-                const history = isHome
-                  ? (Array.isArray(homeCommentLevel?.level?.comments) ? homeCommentLevel.level.comments : [])
-                  : (Array.isArray(trackerCommentRow?.comments) ? trackerCommentRow.comments : []);
-
-                return (
-                  <>
-                    <div style={styles.muted}>Row: {rowLabel}</div>
-
-                    <label style={styles.label}>
-                      Your name
-                      <input
-                        style={styles.input}
-                        value={commentName}
-                        onChange={(e) => setCommentName(e.target.value)}
-                        placeholder="Name"
-                        disabled={!canAdd}
-                      />
-                    </label>
+              <label style={styles.label}>
+                Your name
+                <input style={styles.input} value={commentName} onChange={(e) => setCommentName(e.target.value)} placeholder="Name" />
+              </label>
 
               <label style={styles.label}>
                 Date
                 <input style={{ ...styles.input, ...styles.inputMuted }} value={isoToday()} readOnly />
               </label>
 
-                    <label style={styles.label}>
-                      Comment
-                      <textarea
-                        style={{ ...styles.input, minHeight: 90, resize: "vertical" }}
-                        value={commentText}
-                        onChange={(e) => setCommentText(e.target.value)}
-                        placeholder="Write your comment…"
-                        disabled={!canAdd}
-                      />
-                    </label>
+              <label style={styles.label}>
+                Comment
+                <textarea
+                  style={{ ...styles.input, minHeight: 90, resize: "vertical" }}
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  placeholder="Write your comment…"
+                />
+              </label>
 
-                    {!canAdd ? <div style={styles.muted}>{"you currently dont have permission to change this field - please contact admin"}</div> : null}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button style={styles.secondaryBtn} onClick={closeComments}>
+                  Cancel
+                </button>
+                <button style={styles.primaryBtn} onClick={saveComment}>
+                  Save (locks)
+                </button>
+              </div>
 
-                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                      <button style={styles.secondaryBtn} onClick={closeComments}>
-                        Cancel
-                      </button>
-                      <button style={styles.primaryBtn} onClick={saveComment} disabled={!canAdd}>
-                        Save (locks)
-                      </button>
-                    </div>
-
-                    <div style={{ borderTop: "1px solid #E5E7EB", paddingTop: 10 }}>
-                      <div style={{ fontWeight: 900, marginBottom: 6 }}>History</div>
-                      {history.length ? (
-                        <div style={{ display: "grid", gap: 8 }}>
-                          {[...history]
-                            .slice()
-                            .reverse()
-                            .map((c) => (
-                              <div key={c.id} style={styles.commentItem}>
-                                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                                  <div style={{ fontWeight: 800 }}>{c.name || "—"}</div>
-                                  <div style={styles.muted}>
-                                    {c.dateISO || ""} {c.locked ? "🔒" : ""}
-                                  </div>
-                                </div>
-                                <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{c.text || ""}</div>
-                              </div>
-                            ))}
+              <div style={{ borderTop: "1px solid #E5E7EB", paddingTop: 10 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>History</div>
+                {Array.isArray(commentRow?.comments) && commentRow.comments.length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {[...commentRow.comments]
+                      .slice()
+                      .reverse()
+                      .map((c) => (
+                        <div key={c.id} style={styles.commentItem}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                            <div style={{ fontWeight: 800 }}>{c.name || "—"}</div>
+                            <div style={styles.muted}>
+                              {c.dateISO || ""} {c.locked ? "🔒" : ""}
+                            </div>
+                          </div>
+                          <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{c.text || ""}</div>
                         </div>
-                      ) : (
-                        <div style={styles.muted}>No comments yet.</div>
-                      )}
-                    </div>
-                  </>
-                );
-              })()}
+                      ))}
+                  </div>
+                ) : (
+                  <div style={styles.muted}>No comments yet.</div>
+                )}
+              </div>
             </div>
           </div>
         </div>
