@@ -53,39 +53,6 @@ function diffDaysUTC(startISO, finishISO) {
   if (!Number.isFinite(diff)) return null;
   return Math.round(diff / dayMs());
 }
-/* ---------- UI helpers ---------- */
-
-
-function datePillStyle({ row, dateKey }) {
-  // Not required → always muted
-  if (row.notRequired) return styles.pillMuted;
-
-  // Completed row → everything green
-  if (row.completed) return styles.pillDone;
-
-  // Extract the actual date for this pill
-  const dateISO = row[dateKey];
-  const date = parseISO(dateISO);
-  if (!date) return styles.pillNeutral;
-
-  const today = parseISO(isoToday());
-  const daysLeft = Math.ceil((date.getTime() - today.getTime()) / dayMs());
-
-  // Ticked milestones
-  if (dateKey === "statusA" && row.statusADone) return styles.pillDone;
-  if (dateKey === "firstIssue" && row.firstIssueDone) return styles.pillDone;
-
-  // 🔴 Late (date-specific)
-  if (daysLeft < 0) return styles.pillLate;
-
-  // 🟠 Due soon (< 7 days)
-  if (daysLeft <= 7) return styles.pillDueSoon;
-
-  // Default
-  return styles.pillNeutral;
-}
-
-
 
 /* ---------- schedule model ---------- */
 const ANCHORS = [
@@ -171,11 +138,11 @@ function TrafficKeyDotsOnly() {
     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <span style={styles.keyItem}>
         <TrafficDot status="green" />
-        <span style={styles.keyText}>Completed</span>
+        <span style={styles.keyText}>On track</span>
       </span>
       <span style={styles.keyItem}>
         <TrafficDot status="amber" />
-        <span style={styles.keyText}>Due Soon</span>
+        <span style={styles.keyText}>Due soon</span>
       </span>
       <span style={styles.keyItem}>
         <TrafficDot status="red" />
@@ -549,30 +516,26 @@ export default function App() {
     return roles.includes("administrator") || roles.includes("admin");
   }, [authUser, authRoles]);
 
-  const isManager = useMemo(() => {
-    if (!authUser) return false;
-    const roles = authRoles.map((r) => String(r || "").toLowerCase());
-    return roles.includes("manager");
-  }, [authUser, authRoles]);
+    const rolesLower = useMemo(() => authRoles.map((r) => String(r || "").trim().toLowerCase()), [authRoles]);
 
-  const isTeam = useMemo(() => {
-    if (!authUser) return false;
-    const roles = authRoles.map((r) => String(r || "").toLowerCase());
-    return roles.includes("team");
-  }, [authUser, authRoles]);
+  const isManager = useMemo(() => rolesLower.includes("manager"), [rolesLower]);
+  const isTeam = useMemo(() => rolesLower.includes("team"), [rolesLower]);
 
-  // Guest (supplier user) = logged in, not admin/manager/team
+  const canSeeAllProjects = useMemo(() => isAdmin || isManager || isTeam, [isAdmin, isManager, isTeam]);
+
+  const noPermission = useCallback(() => {
+    try {
+      window.alert("You currently don\\'t have permission to change this field. Please contact admin.");
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const isGuest = !!authUser && !isAdmin && !isManager && !isTeam;
-
-  const canSeeAllProjects = isAdmin || isManager || isTeam;
-  const canChat = !isGuest; // keep Guest behaviour as-is (guests don't see chat)
-  const canTickDone = isAdmin || isManager;
-  const canEditMasterDates = isAdmin || isManager; // Project Home only
-
 
   const hasSupplierAccess = useCallback(
     (supplier) => {
-      if (canSeeAllProjects) return true;
+            if (canSeeAllProjects) return true;
       const s = String(supplier || "").trim().toLowerCase();
       if (!s) return false;
       const roles = authRoles.map((r) => String(r || "").trim().toLowerCase());
@@ -583,7 +546,7 @@ export default function App() {
 
   // Guests only see projects that have at least one tracker page for their supplier
   const visibleProjects = useMemo(() => {
-    if (isAdmin) return projects;
+    if (canSeeAllProjects) return projects;
     if (!projects?.length) return [];
     return projects.filter((p) =>
       (p.pages || []).some((pg) => {
@@ -594,7 +557,7 @@ export default function App() {
         return supplier && hasSupplierAccess(supplier);
       })
     );
-  }, [projects, isAdmin, hasSupplierAccess]);
+  }, [projects, canSeeAllProjects, hasSupplierAccess]);
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -630,47 +593,6 @@ export default function App() {
     setChatBusy(false);
     setChatStatus("idle");
   }
-
-
-function noPermission() {
-  alert("You currently dont have permission to change this field - please contact admin");
-}
-
-
-/* ---------- audit log (local) ---------- */
-const AUDIT_KEY = "supplysync:audit:v1";
-const [auditLog, setAuditLog] = useState(() => {
-  try {
-    const raw = localStorage.getItem(AUDIT_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-});
-
-useEffect(() => {
-  try {
-    localStorage.setItem(AUDIT_KEY, JSON.stringify(auditLog.slice(-500)));
-  } catch {
-    // ignore
-  }
-}, [auditLog]);
-
-function pushAudit(action, meta) {
-  const who =
-    (authUser && (authUser.email || authUser.userId || authUser.name)) ||
-    (authUser === null ? "anonymous" : "unknown");
-  const entry = {
-    id: uid(),
-    at: new Date().toISOString(),
-    who,
-    role: isAdmin ? "admin" : isManager ? "manager" : isTeam ? "team" : isGuest ? "guest" : "user",
-    action,
-    meta: meta || {},
-  };
-  setAuditLog((prev) => [...prev.slice(-499), entry]);
-}
 
 
   useEffect(() => {
@@ -971,6 +893,8 @@ function pushAudit(action, meta) {
 
   /* ---- update helpers ---- */
   function updateProject(projectId, patch) {
+    if (!isAdmin) return noPermission();
+
     setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...patch } : p)));
   }
 
@@ -989,7 +913,16 @@ function pushAudit(action, meta) {
 
   function updateRow(rowId, patch) {
     if (!activeProject || !activePage) return;
-    pushAudit("updateRow", { projectId: activeProject.id, pageId: activePage.id, rowId, patch: Object.keys(patch || {}) });
+    const keys = Object.keys(patch || {});
+    const allowOnly = (allowed) => keys.every((k) => allowed.includes(k));
+    if (isTeam) {
+      if (!allowOnly(["comments", "locks"])) return noPermission();
+    } else if (isManager) {
+      if (!allowOnly(["comments", "locks", "completed"])) return noPermission();
+    } else if (isGuest) {
+      if (!allowOnly(["comments", "locks", "statusADone", "firstIssueDone"])) return noPermission();
+    }
+
 
     setProjects((prev) =>
       prev.map((p) => {
@@ -1013,22 +946,29 @@ function pushAudit(action, meta) {
   /* ---- master edits ---- */
   function addMasterRow() {
     if (!isAdmin) return noPermission();
+
+    if (!activeProject) return;
     updateProject(activeProject.id, { master: [...(activeProject.master || []), defaultMasterRow()] });
   }
   function updateMasterRow(masterId, patch) {
+    if (!isAdmin) return noPermission();
+
     if (!activeProject) return;
-    pushAudit("updateMasterRow", { projectId: activeProject.id, masterId, patch: Object.keys(patch || {}) });
     updateProject(activeProject.id, {
       master: (activeProject.master || []).map((m) => (m.id === masterId ? { ...m, ...patch } : m)),
     });
   }
   function removeMasterRow(masterId) {
     if (!isAdmin) return noPermission();
+
+    if (!activeProject) return;
     const next = (activeProject.master || []).filter((m) => m.id !== masterId);
     updateProject(activeProject.id, { master: next.length ? next : [defaultMasterRow()] });
   }
   function addLevel(masterId) {
     if (!isAdmin) return noPermission();
+
+    if (!activeProject) return;
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
       const current = Array.isArray(m.levels) ? m.levels : [];
@@ -1039,14 +979,16 @@ function pushAudit(action, meta) {
   }
   function updateLevel(masterId, levelId, patch) {
     if (!activeProject) return;
-    pushAudit("updateLevel", { projectId: activeProject.id, masterId, levelId, patch: Object.keys(patch || {}) });
-    if (!isAdmin) {
-      // Manager can edit start/finish dates only (Project Home)
-      if (!isManager) return noPermission();
+    if (isAdmin) {
+      // ok
+    } else if (isManager) {
       const keys = Object.keys(patch || {});
-      const allowed = keys.every((k) => k === "startDate" || k === "finishDate");
-      if (!allowed) return noPermission();
+      const allowed = ["startDate", "finishDate"];
+      if (!keys.every((k) => allowed.includes(k))) return noPermission();
+    } else {
+      return noPermission();
     }
+
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
       const levels = (m.levels || []).map((lv) => (lv.id === levelId ? { ...lv, ...patch } : lv));
@@ -1056,6 +998,8 @@ function pushAudit(action, meta) {
   }
   function removeLevel(masterId, levelId) {
     if (!isAdmin) return noPermission();
+
+    if (!activeProject) return;
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
       const levels = (m.levels || []).filter((lv) => lv.id !== levelId);
@@ -1066,11 +1010,15 @@ function pushAudit(action, meta) {
 
   function addResponsibility() {
     if (!isAdmin) return noPermission();
+
+    if (!activeProject) return;
     updateProject(activeProject.id, {
       responsibilities: [...(activeProject.responsibilities || []), defaultResponsibility()],
     });
   }
   function updateResponsibility(respId, patch) {
+    if (!isAdmin) return noPermission();
+
     if (!activeProject) return;
     updateProject(activeProject.id, {
       responsibilities: (activeProject.responsibilities || []).map((r) => (r.id === respId ? { ...r, ...patch } : r)),
@@ -1078,6 +1026,8 @@ function pushAudit(action, meta) {
   }
   function removeResponsibility(respId) {
     if (!isAdmin) return noPermission();
+
+    if (!activeProject) return;
     const remaining = (activeProject.responsibilities || []).filter((r) => r.id !== respId);
     updateProject(activeProject.id, { responsibilities: remaining.length ? remaining : [defaultResponsibility()] });
   }
@@ -1142,19 +1092,23 @@ function pushAudit(action, meta) {
   }, [activeProject?.id, activeProject?.master, activePage?.id, activePage?.name, activePage?.meta?.isMaster]);
 
   function addManualRow() {
+    if (!isAdmin) return noPermission();
+
     if (!activeProject || !activePage || activePage.meta?.isMaster) return;
     const r = defaultRow("item");
     r.meta.generated = false;
     updatePage(activeProject.id, activePage.id, { rows: [...activePage.rows, r] });
   }
   function removeRow(rowId) {
+    if (!isAdmin) return noPermission();
+
     if (!activeProject || !activePage || activePage.meta?.isMaster) return;
     updatePage(activeProject.id, activePage.id, { rows: activePage.rows.filter((r) => r.id !== rowId) });
   }
 
   function addProject() {
     if (!isAdmin) return noPermission();
-    pushAudit("addProject", {});
+
     const p = defaultProject(`Project ${projects.length + 1}`);
     setProjects((prev) => [...prev, p]);
     setActiveProjectId(p.id);
@@ -1239,56 +1193,37 @@ function pushAudit(action, meta) {
               const totalDurationDays = diffDaysUTC(dates.firstIssue, dates.requiredOnSite);
 
               out.push({
-              projectId: proj.id,
-              projectName: proj.name,
-              pageId: pg.id,
-              pageName: pg.name,
-              rowId: r.id,
-              title: r.item || "Unknown",
-              supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
-              requiredOnSite: dates.requiredOnSite || "",
-              statusA: dates.statusA || "",
-              firstIssue: dates.firstIssue || "",
-              anchorKey: r.anchorKey || "N/A",
-              anchorDateISO: r.anchorDateISO || "N/A",
-              daysReqToStatusA: d1 || 0,
-              daysStatusAToFirstIssue: d2 || 0,
-              totalDurationDays: totalDurationDays || 0,
-              timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "",
-              commentsText: commentsText || "",
-              commentsCount: comments.length || 0,
+                projectId: proj.id,
+                projectName: proj.name,
+                pageId: pg.id,
+                pageName: pg.name,
+                rowId: r.id,
+                title: r.item || "Unknown",  // Safeguard for missing item/title
+                supplier: supplierByRespId.get(pg.meta?.responsibilityId) || "Unknown",
+                requiredOnSite: dates.requiredOnSite || "N/A",  // Default if not available
+                statusA: dates.statusA || "N/A",  // Default if not available
+                firstIssue: dates.firstIssue || "N/A",  // Default if not available
+                anchorKey: r.anchorKey || "N/A",  // Safeguard
+                anchorDateISO: r.anchorDateISO || "N/A",  // Safeguard
+                daysReqToStatusA: d1 || 0,  // Default to 0 if undefined
+                daysStatusAToFirstIssue: d2 || 0,  // Default to 0 if undefined
+                totalDurationDays: totalDurationDays || 0,  // Default to 0 if undefined
+                timeframe: dates.firstIssue && dates.requiredOnSite ? `${dates.firstIssue} → ${dates.requiredOnSite}` : "N/A",
+                commentsText: commentsText || "No comments",  // Safeguard for empty comments
+                commentsCount: comments.length || 0,  // Default to 0 if no comments
 
-              // tickboxes
-              completed: !!r.completed,
-              notRequired: !!r.notRequired,
-              statusADone: !!r.statusADone,
-              firstIssueDone: !!r.firstIssueDone,
-
-              // ✅ canonical approval state
-              approvalState: {
-              statusA: !!r.statusADone,
-              firstIssue: !!r.firstIssueDone,
-              completed: !!r.completed,
-              overdue: status === "overdue",
-              },
-                searchText: [
-                proj.name,
-                pg.name,
-                r.item,
-                supplierByRespId.get(pg.meta?.responsibilityId),
-                `statusA:${!!r.statusADone}`,
-                `firstIssue:${!!r.firstIssueDone}`,
-                `completed:${!!r.completed}`,
-                `overdue:${status === "overdue"}`,
-                ].filter(Boolean).join(" | "),
+                // ✅ tickboxes (for chat search)
+                completed: !!r.completed,  // Ensure it's a boolean (if it's missing, it'll be false)
+                notRequired: !!r.notRequired, // Will always be false if missing
+                statusADone: !!r.statusADone,  // Ensure it's a boolean
+                firstIssueDone: !!r.firstIssueDone,  // Ensure it's a boolean
 
                 status,
-              traffic,
+                traffic,
               });
             });
         });
     });
-
 
     const rank = { overdue: 0, ongoing: 1, done: 2 };
     out.sort((a, b) => {
@@ -1769,8 +1704,8 @@ return {
     // Only decide initial landing once we have BOTH auth + blob state
     didInitialRouteRef.current = true;
 
-    if (isAdmin) {
-      // Admin always starts on Home
+    if (isAdmin || isManager || isTeam) {
+      // Admin/Manager/Team always start on Home
       setView(VIEW.LANDING);
       return;
     }
@@ -1791,7 +1726,7 @@ return {
 
     if (allowed.length) setActivePageId(allowed[0].id);
     setView(VIEW.PROJECT);
-  }, [isBooting, isAdmin, visibleProjects, hasSupplierAccess]);
+  }, [isBooting, isAdmin, isManager, isTeam, visibleProjects, hasSupplierAccess]);
 
   if (isBooting) {
     return (
@@ -1858,7 +1793,7 @@ return {
           <div style={styles.page}>
             <div style={styles.header}>
               <div style={styles.brandRow}>
-                <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
+                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
                 <div>
                   <h1 style={styles.h1}>SupplySync</h1>
                   <p style={styles.sub}>Your Strategic Supply & Delivery Platform</p>
@@ -1912,29 +1847,7 @@ return {
                 <button style={styles.secondaryBtn} onClick={goToProject}>
                   Go to Project
                 </button>
-              
-              <button
-  style={styles.dangerBtn}
-  onClick={() => {
-    if (!activeProject) return;
-
-    const ok = window.confirm(
-      `Are you sure you want to remove "${activeProject.name}"?\n\n` +
-      `This cannot be undone.\n\n` +
-      `If a backup exists from before the last save, the project can be recovered from backup.`
-    );    
-
-    if (!ok) return;
-
-    setProjects((prev) => prev.filter((p) => p.id !== activeProject.id));
-    setActiveProjectId(null);
-    setActivePageId(null);
-    setView(VIEW.LANDING);
-  }}
->
-  Remove Project
-</button>
-                </div>
+              </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
                 <button
@@ -1955,8 +1868,7 @@ return {
           </div>
         </div>
 
-        {canChat && (
-          <ChatOverlay
+        { (isAdmin || isManager || isTeam) && (<ChatOverlay
             open={chatOpen}
             setOpen={setChatOpen}
             messages={chatMessages}
@@ -2029,8 +1941,7 @@ return {
           </div>
         </div>
 
-        {canChat && (
-          <ChatOverlay
+        { (isAdmin || isManager || isTeam) && (<ChatOverlay
             open={chatOpen}
             setOpen={setChatOpen}
             messages={chatMessages}
@@ -2057,7 +1968,7 @@ return {
           <div style={styles.page}>
             <div style={styles.header}>
               <div style={styles.brandRow}>
-                <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
+                <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
                 <div>
                   <h1 style={styles.h1}>Summary</h1>
                   <p style={styles.sub}>All projects + responsibilities (excluding “Not required”). Traffic is based on Status A.</p>
@@ -2081,115 +1992,108 @@ return {
             </div>
 
             <div style={styles.card}>
-  <div style={styles.tableTop}>
-    <div style={{ display: "grid", gap: 8 }}>
-      {/* If you want to REMOVE the dot legend too, delete this line */}
-      <TrafficKeyDotsOnly />
+              <div style={styles.tableTop}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <TrafficKeyDotsOnly />
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
-          Project
-          <select
-            style={{ ...styles.input, width: 220 }}
-            value={summaryProjectId}
-            onChange={(e) => setSummaryProjectId(e.target.value)}
-          >
-            <option value="all">All projects</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
+                      Project
+                      <select style={{ ...styles.input, width: 220 }} value={summaryProjectId} onChange={(e) => setSummaryProjectId(e.target.value)}>
+                        <option value="all">All projects</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
 
-        <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
-          Supplier
-          <select
-            style={{ ...styles.input, width: 220 }}
-            value={summarySupplier}
-            onChange={(e) => setSummarySupplier(e.target.value)}
-          >
-            <option value="all">All suppliers</option>
-            {supplierOptions.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-    </div>
-  </div>
+                    <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
+                      Supplier
+                      <select style={{ ...styles.input, width: 220 }} value={summarySupplier} onChange={(e) => setSummarySupplier(e.target.value)}>
+                        <option value="all">All suppliers</option>
+                        {supplierOptions.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
 
-  <div style={styles.tableWrap}>
-    <table style={styles.table}>
-      <thead>
-        <tr>         
-          <th style={styles.th}>Project</th>
-          <th style={styles.th}>Responsibility</th>
-          <th style={styles.th}>Supplier</th>
-          <th style={styles.th}>Item</th>
-          <th style={styles.th}>Req</th>
-          <th style={styles.th}>Status A</th>
-          <th style={styles.th}>First</th>
-          <th style={styles.th}></th>
-        </tr>
-      </thead>
-
-      <tbody>
-        {filteredSummary.map((it) => (
-          <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`}>
-
-        
-            <td style={styles.td}>{it.projectName}</td>
-            <td style={styles.td}>{it.pageName}</td>
-            <td style={styles.td}>{it.supplier || "—"}</td>
-            <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
-
-            <td style={styles.td}>
-              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "requiredOnSite" }) }}>
-                {it.requiredOnSite || "—"}
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <FilterPill label="Overdue" active={summaryFilter === "overdue"} onClick={() => setSummaryFilter("overdue")} />
+                  <FilterPill label="Ongoing" active={summaryFilter === "ongoing"} onClick={() => setSummaryFilter("ongoing")} />
+                  <FilterPill label="Done" active={summaryFilter === "done"} onClick={() => setSummaryFilter("done")} />
+                  <FilterPill label="All" active={summaryFilter === "all"} onClick={() => setSummaryFilter("all")} />
+                </div>
               </div>
-            </td>
 
-            <td style={styles.td}>
-              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "statusA" }) }}>
-                {it.statusA || "—"}
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Status</th>
+                      <th style={styles.th}>●</th>
+                      <th style={styles.th}>Project</th>
+                      <th style={styles.th}>Responsibility</th>
+                      <th style={styles.th}>Supplier</th>
+                      <th style={styles.th}>Item</th>
+                      <th style={styles.th}>Req</th>
+                      <th style={styles.th}>Status A</th>
+                      <th style={styles.th}>First</th>
+                      <th style={styles.th}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSummary.map((it) => (
+                      <tr
+                        key={`${it.projectId}:${it.pageId}:${it.rowId}`}
+                        style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
+                      >
+                        <td style={styles.td}>
+                          <StatusBadge status={it.status} />
+                        </td>
+                        <td style={styles.tdCenter}>
+                          <TrafficDot status={it.traffic} />
+                        </td>
+                        <td style={styles.td}>{it.projectName}</td>
+                        <td style={styles.td}>{it.pageName}</td>
+                        <td style={styles.td}>{it.supplier || "—"}</td>
+                        <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
+                        <td style={styles.td}>
+                          <div style={styles.pillCompact}>{it.requiredOnSite || "—"}</div>
+                        </td>
+                        <td style={styles.td}>
+                          <div style={styles.pillCompact}>{it.statusA || "—"}</div>
+                        </td>
+                        <td style={styles.td}>
+                          <div style={styles.pillCompact}>{it.firstIssue || "—"}</div>
+                        </td>
+                        <td style={styles.td}>
+                          <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
+                            Open
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {!filteredSummary.length ? (
+                      <tr>
+                        <td style={styles.td} colSpan={10}>
+                          <div style={{ color: "#6B7280" }}>No items.</div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
-            </td>
-
-            <td style={styles.td}>
-              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "firstIssue" }) }}>
-                {it.firstIssue || "—"}
-              </div>
-            </td>
-
-            <td style={styles.td}>
-              <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
-                Open
-              </button>
-            </td>
-          </tr>
-        ))}
-
-        {!filteredSummary.length ? (
-          <tr>
-            <td style={styles.td} colSpan={9}>
-              <div style={{ color: "#6B7280" }}>No items.</div>
-            </td>
-          </tr>
-        ) : null}
-      </tbody>
-    </table>
-  </div>
-</div>
             </div>
           </div>
+        </div>
 
-
-        {canChat && (
-          <ChatOverlay
+        { (isAdmin || isManager || isTeam) && (<ChatOverlay
             open={chatOpen}
             setOpen={setChatOpen}
             messages={chatMessages}
@@ -2214,12 +2118,6 @@ return {
       <div style={styles.shell}>
         <ProjectView
           projects={projects}
-          isManager={isManager}
-          isTeam={isTeam}
-          canTickDone={canTickDone}
-          canEditMasterDates={canEditMasterDates}
-          canComment={canComment}
-          noPermission={noPermission}
           visibleProjects={visibleProjects}
           activeProjectId={activeProjectId}
           activePageId={activePageId}
@@ -2258,8 +2156,7 @@ return {
         />
       </div>
 
-      {canChat && (
-        <ChatOverlay
+      { (isAdmin || isManager || isTeam) && (<ChatOverlay
           open={chatOpen}
           setOpen={setChatOpen}
           messages={chatMessages}
@@ -2290,12 +2187,6 @@ function ProjectView(props) {
     authUser,
     isAdmin,
     isGuest,
-    isManager,
-    isTeam,
-    canTickDone,
-    canEditMasterDates,
-    canComment,
-    noPermission,
     hasSupplierAccess,
     setActiveProjectId,
     setActivePageId,
@@ -2418,11 +2309,6 @@ function adminUnlock(rowId, field) {
 }
 
 function tickMilestone(row, field, checked) {
-    // Permissions: Admin can tick anything. Guest can tick Status A / First Issue only.
-    if (!isAdmin) {
-      const isAllowedForGuest = isGuest && (field === "statusADone" || field === "firstIssueDone");
-      if (!isAllowedForGuest) return noPermission();
-    }
   if (!row) return;
 
   const locked = !!row?.locks?.[field];
@@ -2519,7 +2405,7 @@ function tickMilestone(row, field, checked) {
     <div style={styles.page}>
       <div style={styles.header}>
         <div style={styles.brandRow}>
-          <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
+          <img src="/supplysync-logo.png" alt="SupplySync" style={styles.brandLogo} />
           <div>
             <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
             <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
@@ -2812,7 +2698,8 @@ function tickMilestone(row, field, checked) {
               <thead>
                 <tr>
                   <th style={styles.thSmall}>Done</th>
-                  <th style={styles.thSmall}>NR</th>                  
+                  <th style={styles.thSmall}>NR</th>
+                  <th style={styles.thSmall}>●</th>
                   <th style={styles.thWide}>Title</th>
                   <th style={styles.thMed}>From</th>
                   <th style={styles.thMed}>Anchor</th>
@@ -2846,11 +2733,8 @@ function tickMilestone(row, field, checked) {
                           <input
                             type="checkbox"
                             checked={!!r.completed}
-                            onChange={(e) => {
-                              if (!canTickDone) return noPermission();
-                              updateRow(r.id, { completed: e.target.checked });
-                            }}
-                            disabled={r.notRequired || (!canTickDone)}
+                            onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
+                            disabled={r.notRequired || isGuest}
                           />
                         )}
                       </td>
@@ -2861,19 +2745,19 @@ function tickMilestone(row, field, checked) {
                             type="checkbox"
                             checked={!!r.notRequired}
                             onChange={(e) => {
-                              if (!isAdmin) return noPermission();
                               const checked = e.target.checked;
                               updateRow(r.id, {
                                 notRequired: checked,
                                 ...(checked ? { completed: false, statusADone: false, firstIssueDone: false } : {}),
                               });
                             }}
-                            disabled={!isAdmin}
+                            disabled={isGuest}
                           />
                         )}
                       </td>
 
-                      
+                      <td style={styles.tdCenter}>{r.kind === "header" ? null : <TrafficDot status={r._traffic} />}</td>
+
                       <td style={styles.td}>
                         {r.kind === "header" ? (
                           <div style={{ fontWeight: 800 }}>{r.item}</div>
@@ -2882,7 +2766,7 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.item}
                             onChange={(e) => updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } })}
-                            disabled={r.notRequired || !isAdmin}
+                            disabled={r.notRequired || isGuest}
                           />
                         )}
                       </td>
@@ -2893,7 +2777,7 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.anchorKey}
                             onChange={(e) => updateRow(r.id, { anchorKey: e.target.value })}
-                            disabled={r.notRequired || !isAdmin}
+                            disabled={r.notRequired || isGuest}
                           >
                             {ANCHORS.map((a) => (
                               <option key={a.key} value={a.key}>
@@ -2911,7 +2795,7 @@ function tickMilestone(row, field, checked) {
                             type="date"
                             value={r.anchorDateISO}
                             onChange={(e) => updateRow(r.id, { anchorDateISO: e.target.value })}
-                            disabled={r.notRequired || !isAdmin}
+                            disabled={r.notRequired || isGuest}
                           />
                         )}
                       </td>
@@ -2931,7 +2815,7 @@ function tickMilestone(row, field, checked) {
                           onUnlock={() => adminUnlock(r.id, "statusADone")}
                           onChange={(checked) => tickMilestone(r, "statusADone", checked)}
                           overdue={!!r._overdue?.overdueA}
-                          disabled={disabled || (!isAdmin && !isGuest) || (isGuest && !!r.locks?.statusADone)}
+                          disabled={disabled || (isGuest && !!r.locks?.statusADone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2947,7 +2831,7 @@ function tickMilestone(row, field, checked) {
                           onUnlock={() => adminUnlock(r.id, "firstIssueDone")}
                           onChange={(checked) => tickMilestone(r, "firstIssueDone", checked)}
                           overdue={!!r._overdue?.overdueF}
-                          disabled={disabled || (!isAdmin && !isGuest) || (isGuest && !!r.locks?.firstIssueDone)}
+                          disabled={disabled || (isGuest && !!r.locks?.firstIssueDone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2962,7 +2846,7 @@ function tickMilestone(row, field, checked) {
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
                               onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || !isAdmin}
+                              disabled={r.notRequired || isGuest}
                               title="Req→A"
                             />
                             <input
@@ -2972,7 +2856,7 @@ function tickMilestone(row, field, checked) {
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
                               onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || !isAdmin}
+                              disabled={r.notRequired || isGuest}
                               title="A→First"
                             />
                           </div>
@@ -3079,64 +2963,30 @@ function tickMilestone(row, field, checked) {
 /* ---------- small components ---------- */
 function DatePill({ value, isHeader, overdue, done, muted }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
-
   const empty = !value;
-
-  let dueSoon = false;
-
-  if (!empty && !overdue && !done && !muted) {
-    const today = parseISO(isoToday());
-    const dt = parseISO(value);
-
-    if (today && dt) {
-      const daysLeft = Math.ceil((dt.getTime() - today.getTime()) / dayMs());
-      if (daysLeft >= 0 && daysLeft <= 7) {
-        dueSoon = true;
-      }
-    }
-  }
-
   return (
     <div
       style={{
         ...styles.pillCompact,
         ...(empty ? styles.pillEmpty : null),
-        ...(muted ? styles.pillMuted : null),
         ...(overdue ? styles.pillLate : null),
         ...(done ? styles.pillDone : null),
-        ...(dueSoon ? styles.pillDueSoon : null),
+        ...(muted ? styles.pillMuted : null),
       }}
     >
       {empty ? "—" : value}
     </div>
   );
 }
-
 function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, muted, locked, lockMeta, isAdmin, onUnlock }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
-
   const empty = !value;
-
-  // 🟠 Due soon (< 7 days) — only when meaningful
-  let dueSoon = false;
-  if (!empty && !checked && !overdue && !muted) {
-    const today = parseISO(isoToday());
-    const dt = parseISO(value);
-    if (today && dt) {
-      const daysLeft = Math.ceil((dt.getTime() - today.getTime()) / dayMs());
-      dueSoon = daysLeft >= 0 && daysLeft <= 7;
-    }
-  }
-
   return (
     <div style={styles.milestoneCell}>
       <div
         style={{
           ...styles.pillCompact,
           ...(empty ? styles.pillEmpty : null),
-
-          // order matters: muted/locked override, checked overrides, overdue overrides, dueSoon only if not overdue/checked
-          ...(dueSoon ? styles.pillDueSoon : null),
           ...(overdue ? styles.pillLate : null),
           ...(checked ? styles.pillDone : null),
           ...(muted ? styles.pillMuted : null),
@@ -3145,15 +2995,10 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
       >
         {empty ? "—" : value} {locked ? "🔒" : ""}
       </div>
-
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
         {locked && isAdmin ? (
-          <button
-            style={styles.unlockBtn}
-            onClick={onUnlock}
-            title={lockMeta ? `Locked by ${lockMeta.lockedBy || "—"} on ${lockMeta.lockedAt || ""}` : "Unlock"}
-          >
+          <button style={styles.unlockBtn} onClick={onUnlock} title={lockMeta ? `Locked by ${lockMeta.lockedBy || "—"} on ${lockMeta.lockedAt || ""}` : "Unlock"}>
             Unlock
           </button>
         ) : null}
@@ -3161,7 +3006,6 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
     </div>
   );
 }
-
 function StatusBadge({ status }) {
   const map = {
     overdue: { text: "Overdue", style: styles.badgeOverdue },
@@ -3187,7 +3031,6 @@ const styles = {
   shell: {
     minHeight: "100vh",
     background: "linear-gradient(180deg, #F8FAFC 0%, #F3F4F6 100%)",
-    overflowX: "hidden",
   },
 
   page: {
@@ -3221,7 +3064,7 @@ const styles = {
   sub: { margin: "6px 0 0", color: "#4B5563", fontSize: 13 },
   muted: { color: "#6B7280", fontSize: 12 },
 
-    card: {
+  card: {
     background: "rgba(255,255,255,0.9)",
     border: "1px solid #E5E7EB",
     borderRadius: 16,
@@ -3261,8 +3104,8 @@ const styles = {
   selectorBlock: { display: "grid", gap: 6 },
 
   tableTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" },
-  tableWrap: { overflowX: "auto", WebkitOverflowScrolling: "touch", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
-  table: { width: "100%", minWidth: 980, borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
+  tableWrap: { overflowX: "hidden", border: "1px solid #E5E7EB", borderRadius: 14, width: "100%", background: "#fff" },
+  table: { width: "100%", borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" },
 
   th: { textAlign: "left", fontSize: 12, color: "#374151", background: "#F9FAFB", padding: "10px 10px", borderBottom: "1px solid #E5E7EB" },
   td: { padding: "10px 10px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", fontSize: 12 },
@@ -3274,8 +3117,6 @@ const styles = {
 
   tdCenter: { padding: "10px 8px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", background: "#FFFFFF", textAlign: "center" },
 
-  trBase: {},
-
   trHeader: { background: "#F9FAFB" },
   trLate: { background: "#FEF2F2" },
   trDone: { opacity: 0.75 },
@@ -3284,7 +3125,6 @@ const styles = {
   pillCompact: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, border: "1px solid #E5E7EB", fontSize: 12, background: "#FFFFFF", whiteSpace: "nowrap" },
   pillEmpty: { color: "#9CA3AF", background: "#FAFAFA" },
   pillLate: { border: "1px solid #EF4444" },
-  pillDueSoon: { border: "1px solid #F59E0B" },
   pillDone: { border: "1px solid #10B981" },
   pillMuted: { background: "#F3F4F6", color: "#6B7280" },
   pillLocked: { background: "#F3F4F6", color: "#111827" },
@@ -3301,7 +3141,6 @@ const styles = {
   smallBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
   iconBtn: { background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 12, padding: "8px 10px", fontSize: 12, cursor: "pointer" },
   unlockBtn: { background: "#FEF2F2", color: "#991B1B", border: "1px solid #FCA5A5", borderRadius: 999, padding: "6px 8px", fontSize: 11, cursor: "pointer", fontWeight: 900 },
-  dangerBtn: { background: "#FFCCCB", color: "#111827", border: "1px solid #D1D5DB", borderRadius: 14, padding: "10px 12px", fontSize: 12, cursor: "pointer", fontWeight: 800 },
 
   /* --- Modal (comments) --- */
   modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 },
@@ -3341,14 +3180,14 @@ const styles = {
   ganttBarMissing: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#9CA3AF" },
 
   /* --- Fullscreen programme summary --- */
-  fullscreen: { position: "fixed", inset: 0, background: "#F8FAFC", display: "flex", flexDirection: "column" },
+  fullscreen: { position: "fixed", inset: 0, background: "#F8FAFC", display: "flex", flexDirection: "column", overflowX: "hidden" },
   fullTopBar: { padding: 12, background: "#FFFFFF", borderBottom: "1px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
-  fullBody: { padding: 12, overflow: "auto", display: "flex", justifyContent: "center" },
+  fullBody: { padding: 12, overflowY: "auto", overflowX: "hidden", display: "flex", justifyContent: "center" },
   fullBodyInner: { width: "100%", maxWidth: MAX_W },
   projectSection: { background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 12, marginBottom: 12, width: "100%", boxShadow: "0 10px 24px rgba(17,24,39,0.06)" },
   projectHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 },
   projectTitle: { fontSize: 16, fontWeight: 900, marginBottom: 2 },
-  projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF" },
+  projectGantt: { border: "1px solid #E5E7EB", borderRadius: 16, padding: 10, background: "#FFFFFF", maxWidth: "100%", overflowX: "auto" },
 
   /* --- Boot loading --- */
   loadingTopBar: {
