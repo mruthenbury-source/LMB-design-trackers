@@ -290,6 +290,7 @@ function defaultProject(name = "New Project") {
   return {
     id: uid(),
     name,
+    homeComments: [],
     master: [defaultMasterRow()],
     responsibilities: [defaultResponsibility()],
     pages: [
@@ -549,22 +550,49 @@ export default function App() {
     return roles.includes("administrator") || roles.includes("admin");
   }, [authUser, authRoles]);
 
-  const isGuest = !!authUser && !isAdmin;
+  const isManager = useMemo(() => {
+    if (!authUser || authUser === null) return false;
+    const roles = authRoles.map((r) => String(r || "").toLowerCase());
+    return roles.includes("manager");
+  }, [authUser, authRoles]);
+
+  const isTeam = useMemo(() => {
+    if (!authUser || authUser === null) return false;
+    const roles = authRoles.map((r) => String(r || "").toLowerCase());
+    return roles.includes("team");
+  }, [authUser, authRoles]);
+
+  // "Guest" stays exactly as it currently is: authenticated non-admin users who are NOT Manager/Team
+  // (i.e. supplier-scoped access).
+  const isGuest = !!authUser && !isAdmin && !isManager && !isTeam;
+
+  const NO_PERM_MSG = "you currently dont have permission to change this field - please contact admin";
+  const deny = useCallback(() => {
+    window.alert(NO_PERM_MSG);
+  }, []);
+
+  const canSeeAll = isAdmin || isManager || isTeam;
+  const canEditProjectHomeDates = isAdmin || isManager; // start/finish only
+  const canEditProjectHomeStructure = isAdmin; // add/delete blocks/levels, edit names
+  const canToggleDoneCheckbox = isAdmin || isManager; // tracker page "Done" checkbox
+  const canTickMilestones = isAdmin || isManager || isGuest; // manager + existing guest behaviour
+  const canEditTrackerFields = isAdmin; // everything else on tracker page
+  const canEditDefaultTimeframes = isAdmin; // global TF inputs
 
   const hasSupplierAccess = useCallback(
     (supplier) => {
-      if (isAdmin) return true;
+      if (canSeeAll) return true;
       const s = String(supplier || "").trim().toLowerCase();
       if (!s) return false;
       const roles = authRoles.map((r) => String(r || "").trim().toLowerCase());
       return roles.includes(s) || roles.includes(`supplier:${s}`);
     },
-    [isAdmin, authRoles]
+    [canSeeAll, authRoles]
   );
 
   // Guests only see projects that have at least one tracker page for their supplier
   const visibleProjects = useMemo(() => {
-    if (isAdmin) return projects;
+    if (canSeeAll) return projects;
     if (!projects?.length) return [];
     return projects.filter((p) =>
       (p.pages || []).some((pg) => {
@@ -575,7 +603,7 @@ export default function App() {
         return supplier && hasSupplierAccess(supplier);
       })
     );
-  }, [projects, isAdmin, hasSupplierAccess]);
+  }, [projects, canSeeAll, hasSupplierAccess]);
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -1697,8 +1725,8 @@ return {
     // Only decide initial landing once we have BOTH auth + blob state
     didInitialRouteRef.current = true;
 
-    if (isAdmin) {
-      // Admin always starts on Home
+    if (canSeeAll) {
+      // Admin/Manager/Team always starts on Home
       setView(VIEW.LANDING);
       return;
     }
@@ -1719,7 +1747,7 @@ return {
 
     if (allowed.length) setActivePageId(allowed[0].id);
     setView(VIEW.PROJECT);
-  }, [isBooting, isAdmin, visibleProjects, hasSupplierAccess]);
+  }, [isBooting, canSeeAll, visibleProjects, hasSupplierAccess]);
 
   if (isBooting) {
     return (
@@ -2150,6 +2178,14 @@ return {
           authUser={authUser}
           isAdmin={isAdmin}
           isGuest={isGuest}
+          canSeeAll={canSeeAll}
+          deny={deny}
+          canEditProjectHomeDates={canEditProjectHomeDates}
+          canEditProjectHomeStructure={canEditProjectHomeStructure}
+          canToggleDoneCheckbox={canToggleDoneCheckbox}
+          canTickMilestones={canTickMilestones}
+          canEditTrackerFields={canEditTrackerFields}
+          canEditDefaultTimeframes={canEditDefaultTimeframes}
           hasSupplierAccess={hasSupplierAccess}
           setActiveProjectId={setActiveProjectId}
           setActivePageId={setActivePageId}
@@ -2212,6 +2248,14 @@ function ProjectView(props) {
     authUser,
     isAdmin,
     isGuest,
+    canSeeAll,
+    deny,
+    canEditProjectHomeDates,
+    canEditProjectHomeStructure,
+    canToggleDoneCheckbox,
+    canTickMilestones,
+    canEditTrackerFields,
+    canEditDefaultTimeframes,
     hasSupplierAccess,
     setActiveProjectId,
     setActivePageId,
@@ -2243,7 +2287,7 @@ function ProjectView(props) {
   // Pages a guest is allowed to see inside the active project
   const allowedPages = useMemo(() => {
     if (!activeProject?.pages?.length) return [];
-    if (isAdmin) return activeProject.pages;
+    if (canSeeAll) return activeProject.pages;
     return (activeProject.pages || []).filter((pg) => {
       if (pg.meta?.isMaster) return false;
       const respId = pg.meta?.responsibilityId;
@@ -2251,7 +2295,7 @@ function ProjectView(props) {
       const supplier = String(resp?.supplier || "").trim();
       return supplier && hasSupplierAccess(supplier);
     });
-  }, [activeProject, isAdmin, hasSupplierAccess]);
+  }, [activeProject, canSeeAll, hasSupplierAccess]);
 
   // If a guest lands on Project Home, immediately jump to their first allowed tracker page
   useEffect(() => {
@@ -2266,6 +2310,10 @@ function ProjectView(props) {
   const [commentRowId, setCommentRowId] = useState(null);
   const [commentName, setCommentName] = useState("");
   const [commentText, setCommentText] = useState("");
+
+  // Project Home comments (append-only)
+  const [homeCommentName, setHomeCommentName] = useState("");
+  const [homeCommentText, setHomeCommentText] = useState("");
 
   const commentRow = useMemo(() => {
     if (!commentRowId) return null;
@@ -2308,6 +2356,28 @@ function ProjectView(props) {
     setCommentText("");
   }
 
+  function saveHomeComment() {
+    if (!activeProject) return;
+    if (isGuest) return deny();
+    const name = clean(homeCommentName) || (authUser?.userDetails || authUser?.userId || "guest");
+    const text = clean(homeCommentText);
+    if (!text) return;
+
+    const next = {
+      id: uid(),
+      name,
+      dateISO: isoToday(),
+      text,
+      locked: true,
+      lockedBy: authUser?.userDetails || authUser?.userId || "guest",
+      lockedAt: new Date().toISOString(),
+    };
+
+    const prev = Array.isArray(activeProject.homeComments) ? activeProject.homeComments : [];
+    updateProject(activeProject.id, { homeComments: [...prev, next] });
+    setHomeCommentText("");
+  }
+
   // Guest: if they land on Project Home, push them to their first allowed tracker page
   useEffect(() => {
     if (!activeProject || !activePage) return;
@@ -2338,10 +2408,16 @@ function tickMilestone(row, field, checked) {
 
   const locked = !!row?.locks?.[field];
 
-  // Guests: can only tick ONCE if not locked; cannot untick
-  if (isGuest) {
-    if (!checked) return;          // guests cannot untick
-    if (locked) return;            // locked = can't change
+  // No permission to change milestone fields
+  if (!canTickMilestones) {
+    deny();
+    return;
+  }
+
+  // Supplier Guests + Manager: can only tick ONCE if not locked; cannot untick
+  if (!isAdmin) {
+    if (!checked) return; // cannot untick
+    if (locked) return; // locked = can't change
 
     const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
     if (!ok) return;
@@ -2369,7 +2445,7 @@ function tickMilestone(row, field, checked) {
   });
 }
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
-  const projectOptions = isAdmin ? projects : visibleProjects?.length ? visibleProjects : projects;
+  const projectOptions = canSeeAll ? projects : visibleProjects?.length ? visibleProjects : projects;
 
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
@@ -2383,7 +2459,7 @@ function tickMilestone(row, field, checked) {
             setActiveProjectId(pid);
             const proj = (visibleProjects || projects).find((p) => p.id === pid) || null;
             if (!proj) return;
-            if (isAdmin) {
+            if (canSeeAll) {
               const mp = proj.pages?.find((x) => x.meta?.isMaster) || proj.pages?.[0];
               setActivePageId(mp?.id || null);
             } else {
@@ -2438,7 +2514,7 @@ function tickMilestone(row, field, checked) {
         </div>
         <div style={styles.headerButtons}>
                 {saveButton}
-          {isAdmin ? (
+          {canSeeAll ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                 Home
@@ -2463,9 +2539,13 @@ function tickMilestone(row, field, checked) {
           <input
             style={{ ...styles.input, width: "100%" }}
             value={activeProject?.name || ""}
-            onChange={(e) => activeProject && updateProject(activeProject.id, { name: e.target.value })}
+            onChange={(e) => {
+              if (!activeProject) return;
+              if (!isAdmin) return deny();
+              updateProject(activeProject.id, { name: e.target.value });
+            }}
             placeholder="Project name"
-            disabled={!isAdmin}
+            disabled={!activeProject || isGuest}
           />
         </div>
       </div>
@@ -2485,7 +2565,10 @@ function tickMilestone(row, field, checked) {
           type="number"
           min={0}
           value={globalDaysReqToStatusA}
-          onChange={(e) => setGlobalDaysReqToStatusA(clampInt(e.target.value, 0))}
+          onChange={(e) => {
+            if (!canEditDefaultTimeframes) return deny();
+            setGlobalDaysReqToStatusA(clampInt(e.target.value, 0));
+          }}
         />
       </label>
       <label style={styles.label}>
@@ -2495,7 +2578,10 @@ function tickMilestone(row, field, checked) {
           type="number"
           min={0}
           value={globalDaysStatusAToFirstIssue}
-          onChange={(e) => setGlobalDaysStatusAToFirstIssue(clampInt(e.target.value, 0))}
+          onChange={(e) => {
+            if (!canEditDefaultTimeframes) return deny();
+            setGlobalDaysStatusAToFirstIssue(clampInt(e.target.value, 0));
+          }}
         />
       </label>
     </div>
@@ -2518,7 +2604,14 @@ function tickMilestone(row, field, checked) {
               <div>
                 <h3 style={styles.h3}>Blocks / Zones</h3>
               </div>
-              <button style={styles.primaryBtn} onClick={addMasterRow} disabled={!activeProject}>
+              <button
+                style={styles.primaryBtn}
+                onClick={() => {
+                  if (!canEditProjectHomeStructure) return deny();
+                  addMasterRow();
+                }}
+                disabled={!activeProject}
+              >
                 + Block / Zone
               </button>
             </div>
@@ -2552,7 +2645,10 @@ function tickMilestone(row, field, checked) {
                                   style={styles.input}
                                   placeholder="e.g. Block A / Zone 1"
                                   value={m.blockZone}
-                                  onChange={(e) => updateMasterRow(m.id, { blockZone: e.target.value })}
+                                  onChange={(e) => {
+                                    if (!canEditProjectHomeStructure) return deny();
+                                    updateMasterRow(m.id, { blockZone: e.target.value });
+                                  }}
                                 />
                               </td>
                             ) : null}
@@ -2562,7 +2658,10 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 placeholder={`Level ${idx + 1}`}
                                 value={lv.name}
-                                onChange={(e) => updateLevel(m.id, lv.id, { name: e.target.value })}
+                                onChange={(e) => {
+                                  if (!canEditProjectHomeStructure) return deny();
+                                  updateLevel(m.id, lv.id, { name: e.target.value });
+                                }}
                               />
                             </td>
 
@@ -2571,7 +2670,10 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 type="date"
                                 value={lv.startDate}
-                                onChange={(e) => updateLevel(m.id, lv.id, { startDate: e.target.value })}
+                                onChange={(e) => {
+                                  if (!canEditProjectHomeDates) return deny();
+                                  updateLevel(m.id, lv.id, { startDate: e.target.value });
+                                }}
                               />
                             </td>
 
@@ -2580,7 +2682,10 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 type="date"
                                 value={lv.finishDate}
-                                onChange={(e) => updateLevel(m.id, lv.id, { finishDate: e.target.value })}
+                                onChange={(e) => {
+                                  if (!canEditProjectHomeDates) return deny();
+                                  updateLevel(m.id, lv.id, { finishDate: e.target.value });
+                                }}
                               />
                             </td>
 
@@ -2614,14 +2719,34 @@ function tickMilestone(row, field, checked) {
 
                             <td style={styles.td}>
                               <div style={styles.inline}>
-                                <button style={styles.smallBtn} onClick={() => addLevel(m.id)}>
+                                <button
+                                  style={styles.smallBtn}
+                                  onClick={() => {
+                                    if (!canEditProjectHomeStructure) return deny();
+                                    addLevel(m.id);
+                                  }}
+                                >
                                   + Level
                                 </button>
-                                <button style={styles.iconBtn} onClick={() => removeLevel(m.id, lv.id)} title="Remove level">
+                                <button
+                                  style={styles.iconBtn}
+                                  onClick={() => {
+                                    if (!canEditProjectHomeStructure) return deny();
+                                    removeLevel(m.id, lv.id);
+                                  }}
+                                  title="Remove level"
+                                >
                                   ✕
                                 </button>
                                 {idx === 0 ? (
-                                  <button style={styles.iconBtn} onClick={() => removeMasterRow(m.id)} title="Remove block/zone">
+                                  <button
+                                    style={styles.iconBtn}
+                                    onClick={() => {
+                                      if (!canEditProjectHomeStructure) return deny();
+                                      removeMasterRow(m.id);
+                                    }}
+                                    title="Remove block/zone"
+                                  >
                                     🗑
                                   </button>
                                 ) : null}
@@ -2643,7 +2768,14 @@ function tickMilestone(row, field, checked) {
                 <h3 style={styles.h3}>Design Responsibilities</h3>
                 <div style={styles.muted}>Each responsibility creates a page in this project.</div>
               </div>
-              <button style={styles.primaryBtn} onClick={addResponsibility} disabled={!activeProject}>
+              <button
+                style={styles.primaryBtn}
+                onClick={() => {
+                  if (!canEditProjectHomeStructure) return deny();
+                  addResponsibility();
+                }}
+                disabled={!activeProject}
+              >
                 + Responsibility
               </button>
             </div>
@@ -2665,7 +2797,10 @@ function tickMilestone(row, field, checked) {
                           style={styles.input}
                           placeholder="e.g. MSA / NCCT / Stone"
                           value={r.name}
-                          onChange={(e) => updateResponsibility(r.id, { name: e.target.value })}
+                          onChange={(e) => {
+                            if (!canEditProjectHomeStructure) return deny();
+                            updateResponsibility(r.id, { name: e.target.value });
+                          }}
                         />
                       </td>
                       <td style={styles.td}>
@@ -2673,11 +2808,21 @@ function tickMilestone(row, field, checked) {
                           style={styles.input}
                           placeholder="e.g. ABC Consultants"
                           value={r.supplier || ""}
-                          onChange={(e) => updateResponsibility(r.id, { supplier: e.target.value })}
+                          onChange={(e) => {
+                            if (!canEditProjectHomeStructure) return deny();
+                            updateResponsibility(r.id, { supplier: e.target.value });
+                          }}
                         />
                       </td>
                       <td style={styles.td}>
-                        <button style={styles.iconBtn} onClick={() => removeResponsibility(r.id)} title="Remove">
+                        <button
+                          style={styles.iconBtn}
+                          onClick={() => {
+                            if (!canEditProjectHomeStructure) return deny();
+                            removeResponsibility(r.id);
+                          }}
+                          title="Remove"
+                        >
                           ✕
                         </button>
                       </td>
@@ -2685,6 +2830,58 @@ function tickMilestone(row, field, checked) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <div style={styles.tableTop}>
+              <div>
+                <h3 style={styles.h3}>Project Home Comments</h3>
+                <div style={styles.muted}>Add notes for the project home (append-only).</div>
+              </div>
+            </div>
+
+            <div style={styles.cardInset}>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <input
+                    style={styles.input}
+                    value={homeCommentName}
+                    onChange={(e) => setHomeCommentName(e.target.value)}
+                    placeholder="Name"
+                  />
+                  <textarea
+                    style={{ ...styles.input, minHeight: 80, resize: "vertical" }}
+                    value={homeCommentText}
+                    onChange={(e) => setHomeCommentText(e.target.value)}
+                    placeholder="Write your comment…"
+                  />
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button style={styles.primaryBtn} onClick={saveHomeComment}>
+                      Add comment
+                    </button>
+                  </div>
+                </div>
+
+                {Array.isArray(activeProject?.homeComments) && activeProject.homeComments.length ? (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {[...activeProject.homeComments]
+                      .slice()
+                      .reverse()
+                      .map((c) => (
+                        <div key={c.id} style={styles.commentItem}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                            <div style={{ fontWeight: 800 }}>{c.name || "—"}</div>
+                            <div style={styles.muted}>{c.dateISO || ""}</div>
+                          </div>
+                          <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{c.text}</div>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <div style={styles.muted}>No comments yet.</div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -2757,7 +2954,10 @@ function tickMilestone(row, field, checked) {
                           <input
                             type="checkbox"
                             checked={!!r.completed}
-                            onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
+                            onChange={(e) => {
+                              if (!canToggleDoneCheckbox) return deny();
+                              updateRow(r.id, { completed: e.target.checked });
+                            }}
                             disabled={r.notRequired || isGuest}
                           />
                         )}
@@ -2769,6 +2969,7 @@ function tickMilestone(row, field, checked) {
                             type="checkbox"
                             checked={!!r.notRequired}
                             onChange={(e) => {
+                              if (!canEditTrackerFields) return deny();
                               const checked = e.target.checked;
                               updateRow(r.id, {
                                 notRequired: checked,
@@ -2788,7 +2989,10 @@ function tickMilestone(row, field, checked) {
                           <input
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.item}
-                            onChange={(e) => updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } })}
+                            onChange={(e) => {
+                              if (!canEditTrackerFields) return deny();
+                              updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } });
+                            }}
                             disabled={r.notRequired || isGuest}
                           />
                         )}
@@ -2799,7 +3003,10 @@ function tickMilestone(row, field, checked) {
                           <select
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.anchorKey}
-                            onChange={(e) => updateRow(r.id, { anchorKey: e.target.value })}
+                            onChange={(e) => {
+                              if (!canEditTrackerFields) return deny();
+                              updateRow(r.id, { anchorKey: e.target.value });
+                            }}
                             disabled={r.notRequired || isGuest}
                           >
                             {ANCHORS.map((a) => (
@@ -2817,7 +3024,10 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             type="date"
                             value={r.anchorDateISO}
-                            onChange={(e) => updateRow(r.id, { anchorDateISO: e.target.value })}
+                            onChange={(e) => {
+                              if (!canEditTrackerFields) return deny();
+                              updateRow(r.id, { anchorDateISO: e.target.value });
+                            }}
                             disabled={r.notRequired || isGuest}
                           />
                         )}
@@ -2868,7 +3078,10 @@ function tickMilestone(row, field, checked) {
                               min={0}
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
-                              onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
+                              onChange={(e) => {
+                                if (!canEditTrackerFields) return deny();
+                                updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) });
+                              }}
                               disabled={r.notRequired || isGuest}
                               title="Req→A"
                             />
@@ -2878,7 +3091,10 @@ function tickMilestone(row, field, checked) {
                               min={0}
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
-                              onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
+                              onChange={(e) => {
+                                if (!canEditTrackerFields) return deny();
+                                updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) });
+                              }}
                               disabled={r.notRequired || isGuest}
                               title="A→First"
                             />
