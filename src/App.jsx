@@ -3017,7 +3017,7 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
         ...(muted ? styles.pillMuted : null),
         ...(overdue ? styles.pillLate : null),
         ...(done ? styles.pillDone : null),
-        ...(dueSoon ? styles.DueSoon : null),
+        ...(dueSoon ? styles.pillDueSoon : null),
       }}
     >
       {empty ? "—" : value}
