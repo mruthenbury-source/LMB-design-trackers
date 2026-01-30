@@ -2990,7 +2990,7 @@ function tickMilestone(row, field, checked) {
 }
 
 /* ---------- small components ---------- */
-function DatePill({ value, isHeader, overdue, done, muted }) {
+function DatePill({ value, isHeader, overdue, done, muted, dueSoon }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
   const empty = !value;
   return (
@@ -3001,6 +3001,7 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
         ...(overdue ? styles.pillLate : null),
         ...(done ? styles.pillDone : null),
         ...(muted ? styles.pillMuted : null),
+        ...(dueSoon ? styles.pillDueSoon : null),
       }}
     >
       {empty ? "—" : value}
