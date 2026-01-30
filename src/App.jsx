@@ -549,17 +549,36 @@ export default function App() {
     return roles.includes("administrator") || roles.includes("admin");
   }, [authUser, authRoles]);
 
-  const isGuest = !!authUser && !isAdmin;
+  const isManager = useMemo(() => {
+    if (!authUser) return false;
+    const roles = authRoles.map((r) => String(r || "").toLowerCase());
+    return roles.includes("manager");
+  }, [authUser, authRoles]);
+
+  const isTeam = useMemo(() => {
+    if (!authUser) return false;
+    const roles = authRoles.map((r) => String(r || "").toLowerCase());
+    return roles.includes("team");
+  }, [authUser, authRoles]);
+
+  // Guest (supplier user) = logged in, not admin/manager/team
+  const isGuest = !!authUser && !isAdmin && !isManager && !isTeam;
+
+  const canSeeAllProjects = isAdmin || isManager || isTeam;
+  const canChat = !isGuest; // keep Guest behaviour as-is (guests don't see chat)
+  const canTickDone = isAdmin || isManager;
+  const canEditMasterDates = isAdmin || isManager; // Project Home only
+
 
   const hasSupplierAccess = useCallback(
     (supplier) => {
-      if (isAdmin) return true;
+      if (canSeeAllProjects) return true;
       const s = String(supplier || "").trim().toLowerCase();
       if (!s) return false;
       const roles = authRoles.map((r) => String(r || "").trim().toLowerCase());
       return roles.includes(s) || roles.includes(`supplier:${s}`);
     },
-    [isAdmin, authRoles]
+    [canSeeAllProjects, authRoles]
   );
 
   // Guests only see projects that have at least one tracker page for their supplier
@@ -611,6 +630,47 @@ export default function App() {
     setChatBusy(false);
     setChatStatus("idle");
   }
+
+
+function noPermission() {
+  alert("You currently dont have permission to change this field - please contact admin");
+}
+
+
+/* ---------- audit log (local) ---------- */
+const AUDIT_KEY = "supplysync:audit:v1";
+const [auditLog, setAuditLog] = useState(() => {
+  try {
+    const raw = localStorage.getItem(AUDIT_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+});
+
+useEffect(() => {
+  try {
+    localStorage.setItem(AUDIT_KEY, JSON.stringify(auditLog.slice(-500)));
+  } catch {
+    // ignore
+  }
+}, [auditLog]);
+
+function pushAudit(action, meta) {
+  const who =
+    (authUser && (authUser.email || authUser.userId || authUser.name)) ||
+    (authUser === null ? "anonymous" : "unknown");
+  const entry = {
+    id: uid(),
+    at: new Date().toISOString(),
+    who,
+    role: isAdmin ? "admin" : isManager ? "manager" : isTeam ? "team" : isGuest ? "guest" : "user",
+    action,
+    meta: meta || {},
+  };
+  setAuditLog((prev) => [...prev.slice(-499), entry]);
+}
 
 
   useEffect(() => {
@@ -929,6 +989,7 @@ export default function App() {
 
   function updateRow(rowId, patch) {
     if (!activeProject || !activePage) return;
+    pushAudit("updateRow", { projectId: activeProject.id, pageId: activePage.id, rowId, patch: Object.keys(patch || {}) });
 
     setProjects((prev) =>
       prev.map((p) => {
@@ -950,23 +1011,24 @@ export default function App() {
   }
 
   /* ---- master edits ---- */
-  function addMasterRow() {
-    if (!activeProject) return;
+  \1
+    if (!isAdmin) return noPermission();
     updateProject(activeProject.id, { master: [...(activeProject.master || []), defaultMasterRow()] });
   }
   function updateMasterRow(masterId, patch) {
     if (!activeProject) return;
+    pushAudit("updateMasterRow", { projectId: activeProject.id, masterId, patch: Object.keys(patch || {}) });
     updateProject(activeProject.id, {
       master: (activeProject.master || []).map((m) => (m.id === masterId ? { ...m, ...patch } : m)),
     });
   }
-  function removeMasterRow(masterId) {
-    if (!activeProject) return;
+  \1
+    if (!isAdmin) return noPermission();
     const next = (activeProject.master || []).filter((m) => m.id !== masterId);
     updateProject(activeProject.id, { master: next.length ? next : [defaultMasterRow()] });
   }
-  function addLevel(masterId) {
-    if (!activeProject) return;
+  \1
+    if (!isAdmin) return noPermission();
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
       const current = Array.isArray(m.levels) ? m.levels : [];
@@ -977,6 +1039,14 @@ export default function App() {
   }
   function updateLevel(masterId, levelId, patch) {
     if (!activeProject) return;
+    pushAudit("updateLevel", { projectId: activeProject.id, masterId, levelId, patch: Object.keys(patch || {}) });
+    if (!isAdmin) {
+      // Manager can edit start/finish dates only (Project Home)
+      if (!isManager) return noPermission();
+      const keys = Object.keys(patch || {});
+      const allowed = keys.every((k) => k === "startDate" || k === "finishDate");
+      if (!allowed) return noPermission();
+    }
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
       const levels = (m.levels || []).map((lv) => (lv.id === levelId ? { ...lv, ...patch } : lv));
@@ -984,8 +1054,8 @@ export default function App() {
     });
     updateProject(activeProject.id, { master: next });
   }
-  function removeLevel(masterId, levelId) {
-    if (!activeProject) return;
+  \1
+    if (!isAdmin) return noPermission();
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
       const levels = (m.levels || []).filter((lv) => lv.id !== levelId);
@@ -994,8 +1064,8 @@ export default function App() {
     updateProject(activeProject.id, { master: next });
   }
 
-  function addResponsibility() {
-    if (!activeProject) return;
+  \1
+    if (!isAdmin) return noPermission();
     updateProject(activeProject.id, {
       responsibilities: [...(activeProject.responsibilities || []), defaultResponsibility()],
     });
@@ -1006,8 +1076,8 @@ export default function App() {
       responsibilities: (activeProject.responsibilities || []).map((r) => (r.id === respId ? { ...r, ...patch } : r)),
     });
   }
-  function removeResponsibility(respId) {
-    if (!activeProject) return;
+  \1
+    if (!isAdmin) return noPermission();
     const remaining = (activeProject.responsibilities || []).filter((r) => r.id !== respId);
     updateProject(activeProject.id, { responsibilities: remaining.length ? remaining : [defaultResponsibility()] });
   }
@@ -1083,6 +1153,8 @@ export default function App() {
   }
 
   function addProject() {
+    if (!isAdmin) return noPermission();
+    pushAudit("addProject", {});
     const p = defaultProject(`Project ${projects.length + 1}`);
     setProjects((prev) => [...prev, p]);
     setActiveProjectId(p.id);
@@ -1883,7 +1955,7 @@ return {
           </div>
         </div>
 
-        {!isGuest && (
+        {canChat && (
           <ChatOverlay
             open={chatOpen}
             setOpen={setChatOpen}
@@ -1957,7 +2029,7 @@ return {
           </div>
         </div>
 
-        {!isGuest && (
+        {canChat && (
           <ChatOverlay
             open={chatOpen}
             setOpen={setChatOpen}
@@ -2116,7 +2188,7 @@ return {
           </div>
 
 
-        {!isGuest && (
+        {canChat && (
           <ChatOverlay
             open={chatOpen}
             setOpen={setChatOpen}
@@ -2180,7 +2252,7 @@ return {
         />
       </div>
 
-      {!isGuest && (
+      {canChat && (
         <ChatOverlay
           open={chatOpen}
           setOpen={setChatOpen}
@@ -2334,6 +2406,11 @@ function adminUnlock(rowId, field) {
 }
 
 function tickMilestone(row, field, checked) {
+    // Permissions: Admin can tick anything. Guest can tick Status A / First Issue only.
+    if (!isAdmin) {
+      const isAllowedForGuest = isGuest && (field === "statusADone" || field === "firstIssueDone");
+      if (!isAllowedForGuest) return noPermission();
+    }
   if (!row) return;
 
   const locked = !!row?.locks?.[field];
@@ -2757,8 +2834,11 @@ function tickMilestone(row, field, checked) {
                           <input
                             type="checkbox"
                             checked={!!r.completed}
-                            onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
-                            disabled={r.notRequired || isGuest}
+                            onChange={(e) => {
+                              if (!canTickDone) return noPermission();
+                              updateRow(r.id, { completed: e.target.checked });
+                            }}
+                            disabled={r.notRequired || (!canTickDone)}
                           />
                         )}
                       </td>
@@ -2769,13 +2849,14 @@ function tickMilestone(row, field, checked) {
                             type="checkbox"
                             checked={!!r.notRequired}
                             onChange={(e) => {
+                              if (!isAdmin) return noPermission();
                               const checked = e.target.checked;
                               updateRow(r.id, {
                                 notRequired: checked,
                                 ...(checked ? { completed: false, statusADone: false, firstIssueDone: false } : {}),
                               });
                             }}
-                            disabled={isGuest}
+                            disabled={!isAdmin}
                           />
                         )}
                       </td>
@@ -2789,7 +2870,7 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.item}
                             onChange={(e) => updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired || !isAdmin}
                           />
                         )}
                       </td>
@@ -2800,7 +2881,7 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.anchorKey}
                             onChange={(e) => updateRow(r.id, { anchorKey: e.target.value })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired || !isAdmin}
                           >
                             {ANCHORS.map((a) => (
                               <option key={a.key} value={a.key}>
@@ -2818,7 +2899,7 @@ function tickMilestone(row, field, checked) {
                             type="date"
                             value={r.anchorDateISO}
                             onChange={(e) => updateRow(r.id, { anchorDateISO: e.target.value })}
-                            disabled={r.notRequired || isGuest}
+                            disabled={r.notRequired || !isAdmin}
                           />
                         )}
                       </td>
@@ -2838,7 +2919,7 @@ function tickMilestone(row, field, checked) {
                           onUnlock={() => adminUnlock(r.id, "statusADone")}
                           onChange={(checked) => tickMilestone(r, "statusADone", checked)}
                           overdue={!!r._overdue?.overdueA}
-                          disabled={disabled || (isGuest && !!r.locks?.statusADone)}
+                          disabled={disabled || (!isAdmin && !isGuest) || (isGuest && !!r.locks?.statusADone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2854,7 +2935,7 @@ function tickMilestone(row, field, checked) {
                           onUnlock={() => adminUnlock(r.id, "firstIssueDone")}
                           onChange={(checked) => tickMilestone(r, "firstIssueDone", checked)}
                           overdue={!!r._overdue?.overdueF}
-                          disabled={disabled || (isGuest && !!r.locks?.firstIssueDone)}
+                          disabled={disabled || (!isAdmin && !isGuest) || (isGuest && !!r.locks?.firstIssueDone)}
                           muted={r.notRequired}
                         />
                       </td>
@@ -2869,7 +2950,7 @@ function tickMilestone(row, field, checked) {
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
                               onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || isGuest}
+                              disabled={r.notRequired || !isAdmin}
                               title="Req→A"
                             />
                             <input
@@ -2879,7 +2960,7 @@ function tickMilestone(row, field, checked) {
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
                               onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
-                              disabled={r.notRequired || isGuest}
+                              disabled={r.notRequired || !isAdmin}
                               title="A→First"
                             />
                           </div>
@@ -3094,6 +3175,7 @@ const styles = {
   shell: {
     minHeight: "100vh",
     background: "linear-gradient(180deg, #F8FAFC 0%, #F3F4F6 100%)",
+    overflowX: "hidden",
   },
 
   page: {
