@@ -2533,7 +2533,6 @@ function tickMilestone(row, field, checked) {
                     <th style={styles.th}>Finish</th>
                     <th style={styles.th}>Duration</th>
                     <th style={styles.th}></th>
-                    <th style={styles.thSmall}>💬</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2627,13 +2626,7 @@ function tickMilestone(row, field, checked) {
                                   </button>
                                 ) : null}
                               </div>
-                              <td style={styles.tdCenter}>
-                        {r.kind === "header" ? null : (
-                          <button style={styles.smallBtn} onClick={() => openComments(r)} title="Add/view comments">
-                            💬 {Array.isArray(r.comments) && r.comments.length ? r.comments.length : ""}
-                          </button>
-                        )}
-                          </td>
+                            </td>
                           </tr>
                         );
                       })}
