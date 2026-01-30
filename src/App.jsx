@@ -1011,7 +1011,7 @@ function pushAudit(action, meta) {
   }
 
   /* ---- master edits ---- */
-  \1
+  
     if (!isAdmin) return noPermission();
     updateProject(activeProject.id, { master: [...(activeProject.master || []), defaultMasterRow()] });
   }
