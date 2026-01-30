@@ -3009,13 +3009,29 @@ function DatePill({ value, isHeader, overdue, done, muted }) {
 }
 function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, muted, locked, lockMeta, isAdmin, onUnlock }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
+
   const empty = !value;
+
+  // 🟠 Due soon (< 7 days) — only when meaningful
+  let dueSoon = false;
+  if (!empty && !checked && !overdue && !muted) {
+    const today = parseISO(isoToday());
+    const dt = parseISO(value);
+    if (today && dt) {
+      const daysLeft = Math.ceil((dt.getTime() - today.getTime()) / dayMs());
+      dueSoon = daysLeft >= 0 && daysLeft <= 7;
+    }
+  }
+
   return (
     <div style={styles.milestoneCell}>
       <div
         style={{
           ...styles.pillCompact,
           ...(empty ? styles.pillEmpty : null),
+
+          // order matters: muted/locked override, checked overrides, overdue overrides, dueSoon only if not overdue/checked
+          ...(dueSoon ? styles.pillDueSoon : null),
           ...(overdue ? styles.pillLate : null),
           ...(checked ? styles.pillDone : null),
           ...(muted ? styles.pillMuted : null),
@@ -3024,10 +3040,15 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
       >
         {empty ? "—" : value} {locked ? "🔒" : ""}
       </div>
+
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
         {locked && isAdmin ? (
-          <button style={styles.unlockBtn} onClick={onUnlock} title={lockMeta ? `Locked by ${lockMeta.lockedBy || "—"} on ${lockMeta.lockedAt || ""}` : "Unlock"}>
+          <button
+            style={styles.unlockBtn}
+            onClick={onUnlock}
+            title={lockMeta ? `Locked by ${lockMeta.lockedBy || "—"} on ${lockMeta.lockedAt || ""}` : "Unlock"}
+          >
             Unlock
           </button>
         ) : null}
@@ -3035,6 +3056,7 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
     </div>
   );
 }
+
 function StatusBadge({ status }) {
   const map = {
     overdue: { text: "Overdue", style: styles.badgeOverdue },
