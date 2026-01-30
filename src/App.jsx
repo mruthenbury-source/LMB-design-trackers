@@ -171,11 +171,11 @@ function TrafficKeyDotsOnly() {
     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <span style={styles.keyItem}>
         <TrafficDot status="green" />
-        <span style={styles.keyText}>On track</span>
+        <span style={styles.keyText}>Completed</span>
       </span>
       <span style={styles.keyItem}>
         <TrafficDot status="amber" />
-        <span style={styles.keyText}>Due soon</span>
+        <span style={styles.keyText}>Due Soon</span>
       </span>
       <span style={styles.keyItem}>
         <TrafficDot status="red" />
@@ -2053,8 +2053,7 @@ return {
   <div style={styles.tableWrap}>
     <table style={styles.table}>
       <thead>
-        <tr>
-          <th style={styles.th}>●</th>
+        <tr>         
           <th style={styles.th}>Project</th>
           <th style={styles.th}>Responsibility</th>
           <th style={styles.th}>Supplier</th>
@@ -2070,10 +2069,7 @@ return {
         {filteredSummary.map((it) => (
           <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`}>
 
-            <td style={styles.tdCenter}>
-              <TrafficDot status={it.traffic} />
-            </td>
-
+        
             <td style={styles.td}>{it.projectName}</td>
             <td style={styles.td}>{it.pageName}</td>
             <td style={styles.td}>{it.supplier || "—"}</td>
@@ -2727,8 +2723,7 @@ function tickMilestone(row, field, checked) {
               <thead>
                 <tr>
                   <th style={styles.thSmall}>Done</th>
-                  <th style={styles.thSmall}>NR</th>
-                  <th style={styles.thSmall}>●</th>
+                  <th style={styles.thSmall}>NR</th>                  
                   <th style={styles.thWide}>Title</th>
                   <th style={styles.thMed}>From</th>
                   <th style={styles.thMed}>Anchor</th>
@@ -2785,8 +2780,7 @@ function tickMilestone(row, field, checked) {
                         )}
                       </td>
 
-                      <td style={styles.tdCenter}>{r.kind === "header" ? null : <TrafficDot status={r._traffic} />}</td>
-
+                      
                       <td style={styles.td}>
                         {r.kind === "header" ? (
                           <div style={{ fontWeight: 800 }}>{r.item}</div>
