@@ -2990,24 +2990,41 @@ function tickMilestone(row, field, checked) {
 }
 
 /* ---------- small components ---------- */
-function DatePill({ value, isHeader, overdue, done, muted, dueSoon }) {
+function DatePill({ value, isHeader, overdue, done, muted }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
+
   const empty = !value;
+
+  let dueSoon = false;
+
+  if (!empty && !overdue && !done && !muted) {
+    const today = parseISO(isoToday());
+    const dt = parseISO(value);
+
+    if (today && dt) {
+      const daysLeft = Math.ceil((dt.getTime() - today.getTime()) / dayMs());
+      if (daysLeft >= 0 && daysLeft <= 7) {
+        dueSoon = true;
+      }
+    }
+  }
+
   return (
     <div
       style={{
         ...styles.pillCompact,
         ...(empty ? styles.pillEmpty : null),
+        ...(muted ? styles.pillMuted : null),
         ...(overdue ? styles.pillLate : null),
         ...(done ? styles.pillDone : null),
-        ...(muted ? styles.pillMuted : null),
-        ...(dueSoon ? styles.pillDueSoon : null),
+        ...(dueSoon ? styles.DueSoon : null),
       }}
     >
       {empty ? "—" : value}
     </div>
   );
 }
+
 function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, muted, locked, lockMeta, isAdmin, onUnlock }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
 
