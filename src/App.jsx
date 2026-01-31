@@ -1861,7 +1861,14 @@ return {
                   ))}
                 </select>
 
-                <button style={styles.primaryBtn} onClick={addProject}>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={() => {
+                    if (!isAdmin) return deny();
+                    addProject();
+                  }}
+                  disabled={!isAdmin}
+                >
                   + Project
                 </button>
 
@@ -1871,7 +1878,9 @@ return {
               
               <button
   style={styles.dangerBtn}
+  disabled={!isAdmin}
   onClick={() => {
+    if (!isAdmin) return deny();
     if (!activeProject) return;
 
     const ok = window.confirm(
