@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 export default function ChatOverlay({
   open,
@@ -14,6 +14,78 @@ export default function ChatOverlay({
   status, // "idle" | "checking" | "ok" | "error"
   onReset, // ✅ NEW: function passed in from App
 }) {
+  const [quickId, setQuickId] = useState("statusA_all");
+  const [quickProject, setQuickProject] = useState("");
+  const [quickOnSite, setQuickOnSite] = useState("");
+
+  const quickTemplates = useMemo(
+    () =>
+      ({
+        statusA_all: {
+          label: "Status A overdue — all projects",
+          needsProject: false,
+          needsOnSite: false,
+          build: () =>
+            "From the current tracker context ONLY, list every row that is **Status A overdue** across ALL projects. Treat a row as overdue when Required On Site is in the past and Status A is missing/blank OR Status A occurs after Required On Site. Exclude rows marked done. Output a table with: Project, Level/Block, Item, Required On Site, Status A, Days overdue, Owner/Supplier (if present).",
+        },
+        statusA_project: {
+          label: "Status A overdue — specific project",
+          needsProject: true,
+          needsOnSite: false,
+          build: (p) =>
+            `From the current tracker context ONLY, list every row that is **Status A overdue** for the project named "${p}". Use the same overdue logic as above and exclude rows marked done. Output a table with: Level/Block, Item, Required On Site, Status A, Days overdue, Owner/Supplier (if present). If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
+        },
+        firstIssue_all: {
+          label: "First Issue overdue — all projects",
+          needsProject: false,
+          needsOnSite: false,
+          build: () =>
+            "From the current tracker context ONLY, list every row that is **First Issue overdue** across ALL projects. Treat a row as overdue when the First Issue date is in the past and the row is not done. Output a table with: Project, Level/Block, Item, First Issue, Days overdue, Owner/Supplier (if present).",
+        },
+        firstIssue_project: {
+          label: "First Issue overdue — specific project",
+          needsProject: true,
+          needsOnSite: false,
+          build: (p) =>
+            `From the current tracker context ONLY, list every row that is **First Issue overdue** for the project named "${p}". Treat a row as overdue when the First Issue date is in the past and the row is not done. Output a table with: Level/Block, Item, First Issue, Days overdue, Owner/Supplier (if present). If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
+        },
+        onsite_all: {
+          label: "All levels on site in… — all projects",
+          needsProject: false,
+          needsOnSite: true,
+          build: (_p, d) =>
+            `From the current tracker context ONLY, list ALL rows (levels/blocks) across ALL projects where **Required On Site** falls in: "${d}". (The input may be a month like \"March 2026\" or a date range; interpret it carefully and tell me what window you used.) Output a table with: Project, Level/Block, Item, Required On Site, Status, Traffic light, Done?.`,
+        },
+        onsite_project: {
+          label: "All levels on site in… — specific project",
+          needsProject: true,
+          needsOnSite: true,
+          build: (p, d) =>
+            `From the current tracker context ONLY, list ALL rows (levels/blocks) for the project named "${p}" where **Required On Site** falls in: "${d}". Interpret the date/month input carefully and tell me what window you used. Output a table with: Level/Block, Item, Required On Site, Status, Traffic light, Done?. If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
+        },
+      }),
+    []
+  );
+
+  function applyQuick({ autoSend } = { autoSend: false }) {
+    const t = quickTemplates[quickId];
+    if (!t) return;
+    const project = (quickProject || "").trim();
+    const onSite = (quickOnSite || "").trim();
+
+    // Build prompt with required inputs (but don't block the UI—fallback to placeholders)
+    const p = t.needsProject ? (project || "<enter project name>") : "";
+    const d = t.needsOnSite ? (onSite || "<enter month/date/range>") : "";
+
+    const prompt = t.build(p, d);
+    setInput(prompt);
+
+    // Optionally send immediately
+    if (autoSend && sendChat && prompt.trim()) {
+      // Give React a tick to apply setInput before send
+      setTimeout(() => sendChat(), 0);
+    }
+  }
   // close on ESC
   useEffect(() => {
     if (!open) return;
@@ -112,6 +184,66 @@ export default function ChatOverlay({
 
         {/* Input */}
         <div style={styles.footer}>
+          {/* Quick questions */}
+          <div style={styles.quickWrap}>
+            <div style={styles.quickRow}>
+              <select
+                value={quickId}
+                onChange={(e) => setQuickId(e.target.value)}
+                style={styles.quickSelect}
+                title="Pre-populated questions"
+              >
+                {Object.entries(quickTemplates).map(([id, t]) => (
+                  <option key={id} value={id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                onClick={() => applyQuick({ autoSend: false })}
+                disabled={busy}
+                style={{
+                  ...styles.quickBtn,
+                  ...(busy ? styles.btnDisabled : null),
+                }}
+                title="Insert into message box"
+              >
+                Insert
+              </button>
+
+              <button
+                onClick={() => applyQuick({ autoSend: true })}
+                disabled={busy}
+                style={{
+                  ...styles.quickBtn,
+                  ...(busy ? styles.btnDisabled : null),
+                }}
+                title="Insert and send"
+              >
+                Ask
+              </button>
+            </div>
+
+            {quickTemplates[quickId]?.needsProject ? (
+              <input
+                value={quickProject}
+                onChange={(e) => setQuickProject(e.target.value)}
+                placeholder="Project name…"
+                style={styles.quickInput}
+              />
+            ) : null}
+
+            {quickTemplates[quickId]?.needsOnSite ? (
+              <input
+                value={quickOnSite}
+                onChange={(e) => setQuickOnSite(e.target.value)}
+                placeholder='Month/date/range (e.g. "March 2026" or "1–15 Feb 2026")…'
+                style={styles.quickInput}
+              />
+            ) : null}
+          </div>
+
           <label style={styles.checkboxRow} title="Include historic weekly backups in search results">
             <input
               type="checkbox"
@@ -193,6 +325,44 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     backdropFilter: "blur(10px)",
+  },
+
+  quickWrap: {
+    padding: "10px 10px 0 10px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  quickRow: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+  },
+  quickSelect: {
+    flex: 1,
+    border: "1px solid #E5E7EB",
+    borderRadius: 10,
+    padding: "8px 10px",
+    background: "white",
+    fontSize: 12,
+  },
+  quickBtn: {
+    border: "1px solid #E5E7EB",
+    borderRadius: 10,
+    padding: "8px 10px",
+    background: "#F9FAFB",
+    cursor: "pointer",
+    fontWeight: 800,
+    fontSize: 12,
+    whiteSpace: "nowrap",
+  },
+  quickInput: {
+    width: "100%",
+    border: "1px solid #E5E7EB",
+    borderRadius: 10,
+    padding: "8px 10px",
+    background: "white",
+    fontSize: 12,
   },
 
   topbar: {
