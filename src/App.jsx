@@ -2311,9 +2311,7 @@ function ProjectView(props) {
   const [commentName, setCommentName] = useState("");
   const [commentText, setCommentText] = useState("");
 
-  // Project Home comments (append-only)
-  const [homeCommentName, setHomeCommentName] = useState("");
-  const [homeCommentText, setHomeCommentText] = useState("");
+  // (Removed) Project Home general comments section – comments are only per Block/Level row.
 
   const commentRow = useMemo(() => {
     if (!commentTarget) return null;
@@ -2390,27 +2388,7 @@ function ProjectView(props) {
         setCommentText("");
   }
 
-  function saveHomeComment() {
-    if (!activeProject) return;
-    if (isGuest) return deny();
-    const name = clean(homeCommentName) || (authUser?.userDetails || authUser?.userId || "guest");
-    const text = clean(homeCommentText);
-    if (!text) return;
-
-    const next = {
-      id: uid(),
-      name,
-      dateISO: isoToday(),
-      text,
-      locked: true,
-      lockedBy: authUser?.userDetails || authUser?.userId || "guest",
-      lockedAt: new Date().toISOString(),
-    };
-
-    const prev = Array.isArray(activeProject.homeComments) ? activeProject.homeComments : [];
-    updateProject(activeProject.id, { homeComments: [...prev, next] });
-    setHomeCommentText("");
-  }
+  // (Removed) saveHomeComment()
 
   // Guest: if they land on Project Home, push them to their first allowed tracker page
   useEffect(() => {
@@ -2875,58 +2853,6 @@ function tickMilestone(row, field, checked) {
                   ))}
                 </tbody>
               </table>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 14 }}>
-            <div style={styles.tableTop}>
-              <div>
-                <h3 style={styles.h3}>Project Home Comments</h3>
-                <div style={styles.muted}>Add notes for the project home (append-only).</div>
-              </div>
-            </div>
-
-            <div style={styles.cardInset}>
-              <div style={{ display: "grid", gap: 10 }}>
-                <div style={{ display: "grid", gap: 8 }}>
-                  <input
-                    style={styles.input}
-                    value={homeCommentName}
-                    onChange={(e) => setHomeCommentName(e.target.value)}
-                    placeholder="Name"
-                  />
-                  <textarea
-                    style={{ ...styles.input, minHeight: 80, resize: "vertical" }}
-                    value={homeCommentText}
-                    onChange={(e) => setHomeCommentText(e.target.value)}
-                    placeholder="Write your comment…"
-                  />
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <button style={styles.primaryBtn} onClick={saveHomeComment}>
-                      Add comment
-                    </button>
-                  </div>
-                </div>
-
-                {Array.isArray(activeProject?.homeComments) && activeProject.homeComments.length ? (
-                  <div style={{ display: "grid", gap: 10 }}>
-                    {[...activeProject.homeComments]
-                      .slice()
-                      .reverse()
-                      .map((c) => (
-                        <div key={c.id} style={styles.commentItem}>
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <div style={{ fontWeight: 800 }}>{c.name || "—"}</div>
-                            <div style={styles.muted}>{c.dateISO || ""}</div>
-                          </div>
-                          <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{c.text}</div>
-                        </div>
-                      ))}
-                  </div>
-                ) : (
-                  <div style={styles.muted}>No comments yet.</div>
-                )}
-              </div>
             </div>
           </div>
 
