@@ -430,6 +430,7 @@ padding: 12,
   },
 
   footer: {
+    flexShrink: 0,
     padding: 12,
     borderTop: "1px solid #E5E7EB",
     display: "flex",
@@ -462,6 +463,8 @@ padding: 12,
 
   textarea: {
     flex: 1,
+    background: "#ffffff",
+    border: "2px solid #e5e7eb",
     resize: "none",
     borderRadius: 14,
     border: "1px solid #D1D5DB",
