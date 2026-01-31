@@ -89,10 +89,9 @@ export default function ChatOverlay(props) {
         needsOnSite: false,
         build: () =>
           [
-            "List ALL items across ALL projects where Status A is overdue.
-Search APP_CONTEXT_JSON.rows only."
-"Return: Project | Responsibility | Item | Status A date" 
-"Do not summarise. Do not omit any matches."
+            "Using ONLY the current tracker context, list all projects with Status A overdue.",
+            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
+            "If a field is missing, state it—do not guess.",
           ].join("\n"),
       },
       {
