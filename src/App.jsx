@@ -2307,7 +2307,7 @@ function ProjectView(props) {
   }, [isGuest, activeProject, activePage, allowedPages, setActivePageId]);
 
   // Comments modal state (append-only; each saved comment is locked)
-  const [commentRowId, setCommentRowId] = useState(null);
+  const [commentTarget, setCommentTarget] = useState(null); // { type: 'tracker' | 'master', id: string }
   const [commentName, setCommentName] = useState("");
   const [commentText, setCommentText] = useState("");
 
@@ -2316,25 +2316,46 @@ function ProjectView(props) {
   const [homeCommentText, setHomeCommentText] = useState("");
 
   const commentRow = useMemo(() => {
-    if (!commentRowId) return null;
-    const rows = activePage?.rows || [];
-    return rows.find((r) => r.id === commentRowId) || null;
-  }, [commentRowId, activePage]);
+    if (!commentTarget) return null;
+    if (commentTarget.type === 'tracker') {
+      const rows = activePage?.rows || [];
+      return rows.find((r) => r.id === commentTarget.id) || null;
+    }
+    // master level comments
+    const master = activeProject?.master || [];
+    for (const m of master) {
+      for (const lv of (m.levels || [])) {
+        if (lv.id === commentTarget.id) {
+          return { ...lv, _commentLabel: `${m.block || m.zone || 'Block'} • ${lv.level || lv.name || 'Level'}` };
+        }
+      }
+    }
+    return null;
+  }, [commentTarget, activePage, activeProject]);
 
   function openComments(row) {
     if (!row || row.kind === "header") return;
-    setCommentRowId(row.id);
+    setCommentTarget({ type: 'tracker', id: row.id });
+    setCommentName(authUser?.userDetails || "");
+    setCommentText("");
+  }
+
+  function openMasterComments(masterId, level) {
+    if (!level) return;
+    // guests shouldn't be editing/commenting on Project Home
+    if (isGuest) return deny();
+    setCommentTarget({ type: 'master', id: level.id });
     setCommentName(authUser?.userDetails || "");
     setCommentText("");
   }
 
   function closeComments() {
-    setCommentRowId(null);
+    setCommentTarget(null);
     setCommentText("");
   }
 
   function saveComment() {
-    if (!commentRow) return;
+    if (!commentRow || !commentTarget) return;
     const name = clean(commentName) || (authUser?.userDetails || authUser?.userId || "guest");
     const text = clean(commentText);
     if (!text) return;
@@ -2349,11 +2370,24 @@ function ProjectView(props) {
       lockedAt: new Date().toISOString(),
     };
 
-    updateRow(commentRow.id, {
-      comments: [...(Array.isArray(commentRow.comments) ? commentRow.comments : []), next],
-    });
+    
+    if (commentTarget.type === 'tracker') {
+      updateRow(commentRow.id, {
+        comments: [...(Array.isArray(commentRow.comments) ? commentRow.comments : []), next],
+      });
+    } else {
+      // master level comments stored on the level object
+      const master = activeProject?.master || [];
+      for (const m of master) {
+        const lv = (m.levels || []).find((x) => x.id === commentTarget.id);
+        if (lv) {
+          updateLevel(m.id, lv.id, { comments: [...(Array.isArray(lv.comments) ? lv.comments : []), next] });
+          break;
+        }
+      }
+    }
 
-    setCommentText("");
+        setCommentText("");
   }
 
   function saveHomeComment() {
@@ -2625,7 +2659,8 @@ function tickMilestone(row, field, checked) {
                     <th style={styles.th}>Start</th>
                     <th style={styles.th}>Finish</th>
                     <th style={styles.th}>Duration</th>
-                    <th style={styles.th}></th>
+                    <th style={styles.th}>Actions</th>
+                    <th style={styles.th}>💬</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2751,6 +2786,16 @@ function tickMilestone(row, field, checked) {
                                   </button>
                                 ) : null}
                               </div>
+                            </td>
+
+                            <td style={styles.tdCenter}>
+                              <button
+                                style={styles.smallBtn}
+                                onClick={() => openMasterComments(m.id, lv)}
+                                title="Add/view comments"
+                              >
+                                💬 {Array.isArray(lv.comments) && lv.comments.length ? lv.comments.length : ""}
+                              </button>
                             </td>
                           </tr>
                         );
@@ -3126,7 +3171,7 @@ function tickMilestone(row, field, checked) {
         </div>
       )}
 
-      {commentRowId ? (
+      {commentTarget ? (
         <div style={styles.modalOverlay} onMouseDown={closeComments}>
           <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
@@ -3137,7 +3182,7 @@ function tickMilestone(row, field, checked) {
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>
-              <div style={styles.muted}>Row: {commentRow?.item || "—"}</div>
+              <div style={styles.muted}>Row: {commentRow?.item || commentRow?._commentLabel || commentRow?.level || "—"}</div>
 
               <label style={styles.label}>
                 Your name
