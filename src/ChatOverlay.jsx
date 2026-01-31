@@ -198,98 +198,59 @@ export default function ChatOverlay({
 
         {/* Input */}
         <div style={styles.footer}>
-          {/* Quick questions */}
-          <div style={styles.quickWrap}>
-            <div style={styles.quickRow}>
-              <select
-                value={quickId}
-                onChange={(e) => setQuickId(e.target.value)}
-                style={styles.quickSelect}
-                title="Pre-populated questions"
-              >
-                {Object.entries(quickTemplates).map(([id, t]) => (
-                  <option key={id} value={id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
 
-              <button
-                onClick={() => applyQuick({ autoSend: false })}
-                disabled={busy}
-                style={{
-                  ...styles.quickBtn,
-                  ...(busy ? styles.btnDisabled : null),
-                }}
-                title="Insert into message box"
-              >
-                Insert
-              </button>
+  {/* Quick Questions */}
+  <div style={styles.quickWrap}>
+    <div style={styles.quickRow}>
+      <select
+        value={quickId}
+        onChange={(e) => setQuickId(e.target.value)}
+        style={styles.select}
+      >
+        <option value="">Quick questions…</option>
+        {quickTemplates.map((q) => (
+          <option key={q.id} value={q.id}>
+            {q.label}
+          </option>
+        ))}
+      </select>
 
-              <button
-                onClick={() => applyQuick({ autoSend: true })}
-                disabled={busy}
-                style={{
-                  ...styles.quickBtn,
-                  ...(busy ? styles.btnDisabled : null),
-                }}
-                title="Insert and send"
-              >
-                Ask
-              </button>
-            </div>
+      <button onClick={insertQuick} style={styles.smallBtn}>
+        Insert
+      </button>
 
-            {quickTemplates[quickId]?.needsProject ? (
-              <input
-                value={quickProject}
-                onChange={(e) => setQuickProject(e.target.value)}
-                placeholder="Project name…"
-                style={styles.quickInput}
-              />
-            ) : null}
-
-            {quickTemplates[quickId]?.needsOnSite ? (
-              <input
-                value={quickOnSite}
-                onChange={(e) => setQuickOnSite(e.target.value)}
-                placeholder='Month/date/range (e.g. "March 2026" or "1–15 Feb 2026")…'
-                style={styles.quickInput}
-              />
-            ) : null}
-          </div>
-
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Type a message…"
-            style={styles.textarea}
-            rows={2}
-            disabled={false}
-            onKeyDown={(e) => {
-              // Enter to send, Shift+Enter newline
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendChat?.();
-              }
-            }}
-          />
-
-          <button
-            onClick={() => sendChat?.()}
-            disabled={busy || !input.trim()}
-            style={{
-              ...styles.sendBtn,
-              ...((busy || !input.trim()) ? styles.btnDisabled : null),
-            }}
-            title="Send (Enter)"
-          >
-            Send
-          </button>
-        </div>
-      </div>
+      <button onClick={askQuick} style={styles.smallBtn}>
+        Ask
+      </button>
     </div>
-  );
-}
+  </div>
+
+  {/* ALWAYS BELOW QUICK QUESTIONS */}
+  <div style={styles.queryBlock}>
+    <div style={styles.queryLabel}>Ask anything:</div>
+
+    <textarea
+      value={input}
+      onChange={(e) => setInput(e.target.value)}
+      placeholder="Type a message…"
+      style={styles.textarea}
+      rows={2}
+      disabled={false}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendChat?.();
+        }
+      }}
+    />
+
+    <button onClick={() => sendChat?.()} style={styles.sendBtn}>
+      Send
+    </button>
+  </div>
+
+</div>
+
 
 const styles = {
   fab: {
@@ -493,6 +454,26 @@ padding: 12,
   background: "#fff",
   cursor: "pointer",
   lineHeight: 1.2,
+},
+
+        queryBlock: {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+},
+
+queryLabel: {
+  fontSize: 12,
+  fontWeight: 600,
+},
+
+textarea: {
+  width: "100%",
+  resize: "none",
+  border: "1px solid #e5e7eb",
+  borderRadius: 8,
+  padding: 8,
+  fontSize: 13,
 },
 
 
