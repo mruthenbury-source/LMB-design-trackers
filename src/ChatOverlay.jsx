@@ -1,138 +1,234 @@
-import React, { useEffect, useMemo, useState } from "react";
+// src/ChatOverlay.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-export default function ChatOverlay({
-  open,
-  setOpen,
-  messages,
-  input,
-  setInput,
-  searchBackups,
-  setSearchBackups,
-  busy,
-  sendChat,
-  endRef,
-  status, // "idle" | "checking" | "ok" | "error"
-  onReset, // ✅ NEW: function passed in from App
-}) {
-  const [quickId, setQuickId] = useState("statusA_all");
+/**
+ * ChatOverlay (full file)
+ *
+ * Goals implemented:
+ * - Full-height right-side overlay (visible on every page where mounted)
+ * - Header controls small text: "Search backups" (LEFT of Refresh), Refresh, Close
+ * - Quick questions block in footer
+ * - Free-typing chat input ALWAYS visible BELOW quick questions
+ * - Message list scrolls (does not push footer off screen)
+ * - "All levels on site…" quick questions explicitly reference PROGRAMME data (not tracker)
+ *
+ * Compatibility:
+ * This component supports BOTH prop styles used in your codebase:
+ *
+ * A) "open" style:
+ *    <ChatOverlay open={open} setOpen={setOpen} messages={messages} input={input} setInput={setInput}
+ *                sendChat={sendChat} busy={busy} onReset={onReset}
+ *                searchBackups={searchBackups} setSearchBackups={setSearchBackups}
+ *                chatContext={chatContext} programmeData={programmeData} />
+ *
+ * B) "isOpen" style:
+ *    <ChatOverlay isOpen={isOpen} onClose={onClose} chatMessages={chatMessages} onSend={onSend}
+ *                onRefresh={onRefresh} />
+ *
+ * If your app passes only one style, this will still work.
+ */
+
+export default function ChatOverlay(props) {
+  // ---- Normalise props across both call sites ----
+  const open = props.open ?? props.isOpen ?? false;
+
+  const setOpen =
+    props.setOpen ??
+    ((v) => {
+      // fallback to onClose if present
+      if (v === false && typeof props.onClose === "function") props.onClose();
+    });
+
+  const messages = props.messages ?? props.chatMessages ?? [];
+  const busy = props.busy ?? false;
+
+  const externalInput = props.input;
+  const externalSetInput = props.setInput;
+
+  const [localInput, setLocalInput] = useState("");
+  const input = externalInput !== undefined ? externalInput : localInput;
+  const setInput = externalSetInput !== undefined ? externalSetInput : setLocalInput;
+
+  const externalSearchBackups = props.searchBackups;
+  const externalSetSearchBackups = props.setSearchBackups;
+  const [localSearchBackups, setLocalSearchBackups] = useState(false);
+  const searchBackups =
+    externalSearchBackups !== undefined ? externalSearchBackups : localSearchBackups;
+  const setSearchBackups =
+    externalSetSearchBackups !== undefined ? externalSetSearchBackups : setLocalSearchBackups;
+
+  const onReset = props.onReset ?? props.onRefresh;
+  const chatContext = props.chatContext;
+  const programmeData = props.programmeData;
+
+  // send function: prefer sendChat(text) OR onSend({message, searchBackups})
+  const sendChat =
+    props.sendChat ??
+    (async (text) => {
+      if (typeof props.onSend === "function") {
+        await props.onSend({ message: text, searchBackups });
+      }
+    });
+
+  // ---- Quick question UI state ----
+  const [quickId, setQuickId] = useState("");
   const [quickProject, setQuickProject] = useState("");
   const [quickOnSite, setQuickOnSite] = useState("");
 
-  const quickTemplates = useMemo(
-    () =>
-      ({
-        statusA_all: {
-          label: "Status A overdue — all projects",
-          needsProject: false,
-          needsOnSite: false,
-          build: () =>
-            "From the current tracker context ONLY, list every row that is **Status A overdue** across ALL projects. Treat a row as overdue when Required On Site is in the past and Status A is missing/blank OR Status A occurs after Required On Site. Exclude rows marked done. Output a table with: Project, Level/Block, Item, Required On Site, Status A, Days overdue, Owner/Supplier (if present).",
-        },
-        statusA_project: {
-          label: "Status A overdue — specific project",
-          needsProject: true,
-          needsOnSite: false,
-          build: (p) =>
-            `From the current tracker context ONLY, list every row that is **Status A overdue** for the project named "${p}". Use the same overdue logic as above and exclude rows marked done. Output a table with: Level/Block, Item, Required On Site, Status A, Days overdue, Owner/Supplier (if present). If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
-        },
-        firstIssue_all: {
-          label: "First Issue overdue — all projects",
-          needsProject: false,
-          needsOnSite: false,
-          build: () =>
-            "From the current tracker context ONLY, list every row that is **First Issue overdue** across ALL projects. Treat a row as overdue when the First Issue date is in the past and the row is not done. Output a table with: Project, Level/Block, Item, First Issue, Days overdue, Owner/Supplier (if present).",
-        },
-        firstIssue_project: {
-          label: "First Issue overdue — specific project",
-          needsProject: true,
-          needsOnSite: false,
-          build: (p) =>
-            `From the current tracker context ONLY, list every row that is **First Issue overdue** for the project named "${p}". Treat a row as overdue when the First Issue date is in the past and the row is not done. Output a table with: Level/Block, Item, First Issue, Days overdue, Owner/Supplier (if present). If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
-        },
-        onsite_all: {
-          label: "All levels on site in… — all projects",
-          needsProject: false,
-          needsOnSite: true,
-          build: (_p, d) =>
-            `From the current programme context ONLY (use programme/programmeIndex, NOT tracker rows), list ALL levels/blocks across ALL projects that are **on site in**: "${d}". (The input may be a month like "March 2026" or a date range; interpret it carefully and tell me what window you used.) Output a table with: Project, Block/Zone, Level, Start Date, Finish Date, On-site range.`,
-        },
-        onsite_project: {
-          label: "All levels on site in… — specific project",
-          needsProject: true,
-          needsOnSite: true,
-          build: (p, d) =>
-            `From the current programme context ONLY (use programme/programmeIndex, NOT tracker rows), list ALL levels/blocks for the project named "${p}" that are **on site in**: "${d}". Interpret the date/month input carefully and tell me what window you used. Output a table with: Block/Zone, Level, Start Date, Finish Date, On-site range. If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
-        },
-      }),
-    []
-  );
+  const listRef = useRef(null);
 
-  function applyQuick({ autoSend } = { autoSend: false }) {
-    const t = quickTemplates[quickId];
-    if (!t) return;
-    const project = (quickProject || "").trim();
-    const onSite = (quickOnSite || "").trim();
-
-    // Build prompt with required inputs (but don't block the UI—fallback to placeholders)
-    const p = t.needsProject ? (project || "<enter project name>") : "";
-    const d = t.needsOnSite ? (onSite || "<enter month/date/range>") : "";
-
-    const prompt = t.build(p, d);
-    setInput(prompt);
-
-    // Optionally send immediately
-    if (autoSend && sendChat && prompt.trim()) {
-      // Give React a tick to apply setInput before send
-      setTimeout(() => sendChat(), 0);
-    }
-  }
-  // close on ESC
+  // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (!open) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") setOpen(false);
-      // Cmd/Ctrl + Enter to send
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") sendChat?.();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, setOpen, sendChat]);
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [open, messages.length]);
 
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        style={styles.fab}
-        title="Open chat"
-      >
-        Chat
-      </button>
-    );
+  const programmeHint = useMemo(() => {
+    const hasProgramme =
+      !!programmeData ||
+      (chatContext &&
+        (chatContext.programme ||
+          chatContext.programmeData ||
+          chatContext.programmeIndex ||
+          chatContext.programmeRows));
+    return hasProgramme
+      ? "Use PROGRAMME data (not tracker rows) for on-site level questions. If programme data is missing, say so."
+      : "Programme data may be missing—if so, say you cannot answer accurately.";
+  }, [chatContext, programmeData]);
+
+  const quickTemplates = useMemo(
+    () => [
+      {
+        id: "statusA_all",
+        label: "Status A overdue — all projects",
+        needsProject: false,
+        needsOnSite: false,
+        build: () =>
+          [
+            "Using ONLY the current tracker context, list all projects with Status A overdue.",
+            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
+            "If a field is missing, state it—do not guess.",
+          ].join("\n"),
+      },
+      {
+        id: "statusA_project",
+        label: "Status A overdue — specific project",
+        needsProject: true,
+        needsOnSite: false,
+        build: (p) =>
+          [
+            `Using ONLY the current tracker context, list all Status A overdue items for project: "${p}".`,
+            "Return: Level/Block, item/row reference, due date, days overdue.",
+            "If the project name doesn't match exactly, show the closest matches and ask which to use.",
+          ].join("\n"),
+      },
+      {
+        id: "firstIssue_all",
+        label: "First Issue overdue — all projects",
+        needsProject: false,
+        needsOnSite: false,
+        build: () =>
+          [
+            "Using ONLY the current tracker context, list all projects with First Issue overdue.",
+            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
+            "If a field is missing, state it—do not guess.",
+          ].join("\n"),
+      },
+      {
+        id: "firstIssue_project",
+        label: "First Issue overdue — specific project",
+        needsProject: true,
+        needsOnSite: false,
+        build: (p) =>
+          [
+            `Using ONLY the current tracker context, list all First Issue overdue items for project: "${p}".`,
+            "Return: Level/Block, item/row reference, due date, days overdue.",
+            "If the project name doesn't match exactly, show the closest matches and ask which to use.",
+          ].join("\n"),
+      },
+      {
+        id: "onsite_all",
+        label: "All levels on site in… — all projects (programme)",
+        needsProject: false,
+        needsOnSite: true,
+        build: (_p, d) =>
+          [
+            programmeHint,
+            `Using ONLY the PROGRAMME context, list ALL levels across ALL projects that are on site in: "${d}".`,
+            "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
+            "Return: Project name, Level/Block, on-site date (or range), and which programme field(s) you used.",
+            "Do NOT use tracker rows for this question.",
+            "If programme dates are missing/ambiguous, state what’s missing and which fields you checked.",
+          ].join("\n"),
+      },
+      {
+        id: "onsite_project",
+        label: "All levels on site in… — specific project (programme)",
+        needsProject: true,
+        needsOnSite: true,
+        build: (p, d) =>
+          [
+            programmeHint,
+            `Using ONLY the PROGRAMME context, list ALL levels for project: "${p}" that are on site in: "${d}".`,
+            "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
+            "Return: Level/Block, on-site date (or range), and which programme field(s) you used.",
+            "Do NOT use tracker rows for this question.",
+            "If the project name doesn't match exactly, show the closest matches and ask which to use.",
+          ].join("\n"),
+      },
+    ],
+    [programmeHint]
+  );
+
+  const selectedQuick = useMemo(
+    () => quickTemplates.find((q) => q.id === quickId) || null,
+    [quickId, quickTemplates]
+  );
+
+  function buildQuickPrompt() {
+    if (!selectedQuick) return "";
+    if (selectedQuick.needsProject && !quickProject.trim()) return "";
+    if (selectedQuick.needsOnSite && !quickOnSite.trim()) return "";
+    return selectedQuick.build(quickProject.trim(), quickOnSite.trim());
   }
 
-  const showError = status === "error";
+  function insertQuick() {
+    const prompt = buildQuickPrompt();
+    if (!prompt) return;
+    setInput(prompt);
+  }
+
+  async function askQuick() {
+    const prompt = buildQuickPrompt();
+    if (!prompt) return;
+    setInput(prompt);
+    await handleSend(prompt);
+  }
+
+  async function handleSend(overrideText) {
+    const text = (overrideText ?? input).trim();
+    if (!text || busy) return;
+    await sendChat(text);
+    setInput("");
+  }
+
+  if (!open) return null;
 
   return (
     <div style={styles.overlay}>
       <div style={styles.panel}>
-        {/* Top bar */}
-        <div style={styles.topbar}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={styles.title}>Assistant</div>
-            <div style={styles.subtleStatus}>
-              {busy ? "Thinking…" : status === "ok" ? "Ready" : " "}
-            </div>
-          </div>
+        {/* Header */}
+        <div style={styles.header}>
+          <div style={styles.headerTitle}>Chat</div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <label
-              style={styles.topCheckboxRow}
-              title="Include historic weekly backups in search results"
-            >
+          <div style={styles.headerActions}>
+            <label style={styles.topCheckboxRow} title="Include historic weekly backups in search results">
               <input
                 type="checkbox"
                 checked={!!searchBackups}
-                onChange={(e) => setSearchBackups?.(e.target.checked)}
+                onChange={(e) => setSearchBackups(e.target.checked)}
                 style={styles.checkbox}
               />
               <span style={styles.checkboxLabel}>Search backups</span>
@@ -141,62 +237,47 @@ export default function ChatOverlay({
             <button
               onClick={() => onReset?.()}
               disabled={busy}
-              style={{
-                ...styles.smallBtn,
-                ...(busy ? styles.btnDisabled : null),
-              }}
-              title="Clear chat and start fresh"
+              style={{ ...styles.smallBtn, ...(busy ? styles.btnDisabled : null) }}
+              title="Refresh chat"
             >
               Refresh
             </button>
 
-            <button
-              onClick={() => setOpen(false)}
-              style={styles.smallBtn}
-              title="Close"
-            >
+            <button onClick={() => setOpen(false)} style={styles.smallBtn} title="Close">
               Close
             </button>
           </div>
         </div>
 
-        {/* Body */}
-        <div style={styles.body}>
-          {messages.map((m, idx) => {
-            const isUser = m.role === "user";
-            return (
-              <div
-                key={idx}
-                style={{
-                  display: "flex",
-                  justifyContent: isUser ? "flex-end" : "flex-start",
-                  marginBottom: 8,
-                }}
-              >
+        {/* Body (scrollable messages) */}
+        <div ref={listRef} style={styles.body}>
+          {messages.length === 0 ? (
+            <div style={styles.empty}>
+              Ask anything below, or use a quick question.
+            </div>
+          ) : (
+            messages.map((m, idx) => {
+              const role = m.role ?? m.type; // support both shapes
+              const isUser = role === "user";
+              const content = m.content ?? m.text ?? "";
+              return (
                 <div
+                  key={idx}
                   style={{
-                    ...styles.bubble,
-                    ...(isUser ? styles.userBubble : styles.assistantBubble),
+                    display: "flex",
+                    justifyContent: isUser ? "flex-end" : "flex-start",
                   }}
                 >
-                  {String(m.content || "")}
+                  <div style={{ ...styles.bubble, ...(isUser ? styles.userBubble : styles.assistantBubble) }}>
+                    {content}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-
-          {/* Subtle error line (only if truly error) */}
-          {showError ? (
-            <div style={styles.errorLine}>
-              Couldn’t reach the chat server. You can keep working, or press
-              Refresh to reset the chat.
-            </div>
-          ) : null}
-
-          <div ref={endRef} />
+              );
+            })
+          )}
         </div>
 
-        {/* Input */}
+        {/* Footer: Quick questions (top) + chat input (below) */}
         <div style={styles.footer}>
           {/* Quick questions */}
           <div style={styles.quickWrap}>
@@ -204,87 +285,83 @@ export default function ChatOverlay({
               <select
                 value={quickId}
                 onChange={(e) => setQuickId(e.target.value)}
-                style={styles.quickSelect}
-                title="Pre-populated questions"
+                style={styles.select}
               >
-                {Object.entries(quickTemplates).map(([id, t]) => (
-                  <option key={id} value={id}>
-                    {t.label}
+                <option value="">Quick questions…</option>
+                {quickTemplates.map((q) => (
+                  <option key={q.id} value={q.id}>
+                    {q.label}
                   </option>
                 ))}
               </select>
 
               <button
-                onClick={() => applyQuick({ autoSend: false })}
-                disabled={busy}
-                style={{
-                  ...styles.quickBtn,
-                  ...(busy ? styles.btnDisabled : null),
-                }}
+                type="button"
+                onClick={insertQuick}
+                disabled={!buildQuickPrompt()}
+                style={{ ...styles.smallBtn, ...(buildQuickPrompt() ? null : styles.btnDisabled) }}
                 title="Insert into message box"
               >
                 Insert
               </button>
 
               <button
-                onClick={() => applyQuick({ autoSend: true })}
-                disabled={busy}
-                style={{
-                  ...styles.quickBtn,
-                  ...(busy ? styles.btnDisabled : null),
-                }}
-                title="Insert and send"
+                type="button"
+                onClick={askQuick}
+                disabled={!buildQuickPrompt()}
+                style={{ ...styles.smallBtn, ...(buildQuickPrompt() ? null : styles.btnDisabled) }}
+                title="Send immediately"
               >
                 Ask
               </button>
             </div>
 
-            {quickTemplates[quickId]?.needsProject ? (
-              <input
-                value={quickProject}
-                onChange={(e) => setQuickProject(e.target.value)}
-                placeholder="Project name…"
-                style={styles.quickInput}
-              />
-            ) : null}
-
-            {quickTemplates[quickId]?.needsOnSite ? (
-              <input
-                value={quickOnSite}
-                onChange={(e) => setQuickOnSite(e.target.value)}
-                placeholder='Month/date/range (e.g. "March 2026" or "1–15 Feb 2026")…'
-                style={styles.quickInput}
-              />
-            ) : null}
+            {(selectedQuick?.needsProject || selectedQuick?.needsOnSite) && (
+              <div style={styles.quickRow}>
+                {selectedQuick?.needsProject && (
+                  <input
+                    value={quickProject}
+                    onChange={(e) => setQuickProject(e.target.value)}
+                    placeholder="Project name…"
+                    style={styles.input}
+                  />
+                )}
+                {selectedQuick?.needsOnSite && (
+                  <input
+                    value={quickOnSite}
+                    onChange={(e) => setQuickOnSite(e.target.value)}
+                    placeholder="Month / date / range…"
+                    style={styles.input}
+                  />
+                )}
+              </div>
+            )}
           </div>
 
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Type a message…"
-            style={styles.textarea}
-            rows={2}
-            disabled={false}
-            onKeyDown={(e) => {
-              // Enter to send, Shift+Enter newline
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendChat?.();
-              }
-            }}
-          />
-
-          <button
-            onClick={() => sendChat?.()}
-            disabled={busy || !input.trim()}
-            style={{
-              ...styles.sendBtn,
-              ...((busy || !input.trim()) ? styles.btnDisabled : null),
-            }}
-            title="Send (Enter)"
-          >
-            Send
-          </button>
+          {/* Chat input (ALWAYS visible) */}
+          <div style={styles.composer}>
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask any question…"
+              rows={3}
+              style={styles.textarea}
+              onKeyDown={(e) => {
+                // Enter to send (Shift+Enter for newline)
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+            />
+            <button
+              onClick={() => handleSend()}
+              disabled={busy || !String(input).trim()}
+              style={{ ...styles.sendBtn, ...(busy || !String(input).trim() ? styles.btnDisabled : null) }}
+            >
+              Send
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -292,209 +369,129 @@ export default function ChatOverlay({
 }
 
 const styles = {
-  fab: {
-    position: "fixed",
-    right: 18,
-    bottom: 18,
-    zIndex: 50,
-    borderRadius: 999,
-    padding: "12px 14px",
-    border: "1px solid #D1D5DB",
-    background: "#111827",
-    color: "white",
-    fontWeight: 900,
-    cursor: "pointer",
-    boxShadow: "0 12px 30px rgba(17,24,39,0.25)",
-  },
-
   overlay: {
-  position: "fixed",
-  top: 0,
-  right: 0,
-  height: "100vh",
-  width: 420,
-  maxWidth: "95vw",
-  zIndex: 9999,
-  pointerEvents: "auto",
-},
-
-
+    position: "fixed",
+    top: 0,
+    right: 0,
+    height: "100vh",
+    width: 420,
+    maxWidth: "95vw",
+    zIndex: 9999,
+    pointerEvents: "auto",
+  },
   panel: {
-  height: "100%",
-  background: "#fff",
-  borderLeft: "1px solid #e5e7eb",
-  boxShadow: "0 16px 40px rgba(0,0,0,0.16)",
-  display: "flex",
-  flexDirection: "column",
-},
+    height: "100%",
+    background: "#fff",
+    borderLeft: "1px solid #e5e7eb",
+    boxShadow: "0 16px 40px rgba(0,0,0,0.16)",
+    display: "flex",
+    flexDirection: "column",
+  },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderBottom: "1px solid #e5e7eb",
+    background: "#fff",
+  },
+  headerTitle: { fontWeight: 700, fontSize: 13, color: "#111827" },
+  headerActions: { display: "flex", gap: 8, alignItems: "center" },
 
+  topCheckboxRow: {
+    display: "flex",
+    gap: 6,
+    alignItems: "center",
+    border: "1px solid #e5e7eb",
+    borderRadius: 8,
+    padding: "4px 8px",
+    background: "#fff",
+  },
+  checkbox: { width: 12, height: 12 },
+  checkboxLabel: { fontSize: 11, color: "#111827" },
 
-  quickWrap: {
-    padding: "10px 10px 0 10px",
+  smallBtn: {
+    fontSize: 11,
+    padding: "4px 8px",
+    borderRadius: 8,
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    cursor: "pointer",
+    lineHeight: 1.2,
+  },
+  btnDisabled: { opacity: 0.5, cursor: "not-allowed" },
+
+  body: {
+    flex: 1,
+    overflowY: "auto",
+    padding: 12,
     display: "flex",
     flexDirection: "column",
     gap: 8,
   },
-  quickRow: {
-    display: "flex",
-    gap: 8,
-    alignItems: "center",
-  },
-  quickSelect: {
-    flex: 1,
-    border: "1px solid #E5E7EB",
-    borderRadius: 10,
-    padding: "8px 10px",
-    background: "white",
-    fontSize: 12,
-  },
-  quickBtn: {
-    border: "1px solid #E5E7EB",
-    borderRadius: 10,
-    padding: "8px 10px",
-    background: "#F9FAFB",
-    cursor: "pointer",
-    fontWeight: 800,
-    fontSize: 12,
-    whiteSpace: "nowrap",
-  },
-  quickInput: {
-    width: "100%",
-    border: "1px solid #E5E7EB",
-    borderRadius: 10,
-    padding: "8px 10px",
-    background: "white",
-    fontSize: 12,
-  },
-
-  topCheckboxRow: {
-  display: "flex",
-  gap: 6,
-  alignItems: "center",
-  border: "1px solid #e5e7eb",
-  borderRadius: 8,
-  padding: "4px 8px",
-  background: "#fff",
-},
-
-
-  topbar: {
-    padding: 12,
-    borderBottom: "1px solid #E5E7EB",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    background: "rgba(249,250,251,0.9)",
-  },
-
-  title: { fontWeight: 900, fontSize: 13, color: "#111827" },
-  subtleStatus: { fontSize: 12, color: "#6B7280" },
-
-  body: {
-padding: 12,
-    overflow: "auto",
-    flex: 1,
-  },
-
-
+  empty: { fontSize: 13, color: "#6b7280" },
   bubble: {
     maxWidth: "85%",
-    padding: "10px 12px",
-    borderRadius: 14,
-    fontSize: 12,
     whiteSpace: "pre-wrap",
-    lineHeight: 1.35,
-    border: "1px solid #E5E7EB",
-  },
-
-  userBubble: {
-    background: "#111827",
-    color: "#FFFFFF",
-    borderColor: "#111827",
-  },
-
-  assistantBubble: {
-    background: "#FFFFFF",
-    color: "#111827",
-  },
-
-  errorLine: {
-    marginTop: 8,
-    padding: "8px 10px",
     borderRadius: 12,
-    background: "#FEF9C3",
-    border: "1px solid #FDE68A",
-    color: "#92400E",
-    fontSize: 12,
+    padding: "8px 10px",
+    fontSize: 13,
+    lineHeight: 1.35,
   },
+  userBubble: { background: "#111827", color: "#fff" },
+  assistantBubble: { background: "#f3f4f6", color: "#111827" },
 
   footer: {
-    padding: 12,
-    borderTop: "1px solid #E5E7EB",
+    borderTop: "1px solid #e5e7eb",
+    padding: 10,
     display: "flex",
+    flexDirection: "column",
     gap: 10,
-    alignItems: "flex-end",
-    background: "rgba(249,250,251,0.9)",
+    background: "#fff",
   },
 
-  checkboxRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
+  quickWrap: { display: "flex", flexDirection: "column", gap: 8 },
+  quickRow: { display: "flex", gap: 8, alignItems: "center" },
+
+  select: {
+    flex: 1,
+    border: "1px solid #e5e7eb",
+    borderRadius: 8,
     padding: "6px 8px",
-    border: "1px solid #E5E7EB",
-    borderRadius: 12,
-    background: "rgba(255,255,255,0.9)",
-    fontSize: 12,
-    color: "#111827",
-    userSelect: "none",
-    whiteSpace: "nowrap",
-    cursor: "pointer",
+    fontSize: 13,
+    background: "#fff",
   },
-  checkbox: {
-    width: 14,
-    height: 14,
-    cursor: "pointer",
+  input: {
+    flex: 1,
+    border: "1px solid #e5e7eb",
+    borderRadius: 8,
+    padding: "6px 8px",
+    fontSize: 13,
   },
-  checkboxLabel: { fontSize: 11, color: "#111827" },
 
-
+  composer: {
+    display: "flex",
+    gap: 8,
+    alignItems: "stretch",
+  },
   textarea: {
     flex: 1,
     resize: "none",
-    borderRadius: 14,
-    border: "1px solid #D1D5DB",
-    padding: "10px 12px",
-    fontSize: 12,
-    outline: "none",
-    background: "#FFFFFF",
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    padding: 8,
+    fontSize: 13,
+    lineHeight: 1.3,
+    minHeight: 70,
   },
-
   sendBtn: {
-    borderRadius: 14,
-    border: "1px solid #0D9488",
-    background: "#0D9488",
-    color: "#FFFFFF",
-    fontWeight: 900,
-    padding: "10px 12px",
+    width: 72,
+    borderRadius: 10,
+    border: "1px solid #111827",
+    background: "#111827",
+    color: "#fff",
+    fontSize: 13,
     cursor: "pointer",
-    fontSize: 12,
-  },
-
-  smallBtn: {
-  fontSize: 11,
-  padding: "4px 8px",
-  borderRadius: 8,
-  border: "1px solid #e5e7eb",
-  background: "#fff",
-  cursor: "pointer",
-  lineHeight: 1.2,
-},
-
-
-  btnDisabled: {
-    opacity: 0.55,
-    cursor: "not-allowed",
   },
 };
