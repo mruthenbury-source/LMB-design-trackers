@@ -54,14 +54,14 @@ export default function ChatOverlay({
           needsProject: false,
           needsOnSite: true,
           build: (_p, d) =>
-            `From the current tracker context ONLY, list ALL rows (levels/blocks) across ALL projects where **Required On Site** falls in: "${d}". (The input may be a month like \"March 2026\" or a date range; interpret it carefully and tell me what window you used.) Output a table with: Project, Level/Block, Item, Required On Site, Status, Traffic light, Done?.`,
+            `From the current programme context ONLY (use programme/programmeIndex, NOT tracker rows), list ALL levels/blocks across ALL projects that are **on site in**: "${d}". (The input may be a month like "March 2026" or a date range; interpret it carefully and tell me what window you used.) Output a table with: Project, Block/Zone, Level, Start Date, Finish Date, On-site range.`,
         },
         onsite_project: {
           label: "All levels on site in… — specific project",
           needsProject: true,
           needsOnSite: true,
           build: (p, d) =>
-            `From the current tracker context ONLY, list ALL rows (levels/blocks) for the project named "${p}" where **Required On Site** falls in: "${d}". Interpret the date/month input carefully and tell me what window you used. Output a table with: Level/Block, Item, Required On Site, Status, Traffic light, Done?. If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
+            `From the current programme context ONLY (use programme/programmeIndex, NOT tracker rows), list ALL levels/blocks for the project named "${p}" that are **on site in**: "${d}". Interpret the date/month input carefully and tell me what window you used. Output a table with: Block/Zone, Level, Start Date, Finish Date, On-site range. If the project name is slightly different in the data, use the closest match and tell me what you matched.`,
         },
       }),
     []
@@ -136,6 +136,20 @@ export default function ChatOverlay({
             >
               Refresh
             </button>
+
+            <label
+              style={styles.topCheckboxRow}
+              title="Include historic weekly backups in search results"
+            >
+              <input
+                type="checkbox"
+                checked={!!searchBackups}
+                onChange={(e) => setSearchBackups?.(e.target.checked)}
+                style={styles.checkbox}
+              />
+              <span style={styles.checkboxLabel}>Search backups</span>
+            </label>
+
             <button
               onClick={() => setOpen(false)}
               style={styles.smallBtn}
@@ -243,16 +257,6 @@ export default function ChatOverlay({
               />
             ) : null}
           </div>
-
-          <label style={styles.checkboxRow} title="Include historic weekly backups in search results">
-            <input
-              type="checkbox"
-              checked={!!searchBackups}
-              onChange={(e) => setSearchBackups?.(e.target.checked)}
-              style={styles.checkbox}
-            />
-            <span style={styles.checkboxLabel}>Search backups</span>
-          </label>
 
           <textarea
             value={input}
@@ -363,6 +367,19 @@ const styles = {
     padding: "8px 10px",
     background: "white",
     fontSize: 12,
+  },
+
+  topCheckboxRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "0 6px",
+    borderRadius: 10,
+    border: "1px solid #E5E7EB",
+    background: "#F9FAFB",
+    height: 32,
+    cursor: "pointer",
+    userSelect: "none",
   },
 
   topbar: {
