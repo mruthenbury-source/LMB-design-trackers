@@ -91,10 +91,10 @@ export default function ChatOverlay(props) {
           [
             "Using ONLY the current tracker context, list all projects with Status A overdue.",
             "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Project name, Level/Block, item/row reference, due date,.",
+            "Return: Project name, Level/Block, item/row reference, supplier,.",
             "If a field is missing, state it—do not guess.",
             "Do not omit any matches.",
-            "run validation"
+            "Do not add items that are not a match and have tick for Status A as YES.",
           ].join("\n"),
       },
       {
@@ -106,11 +106,10 @@ export default function ChatOverlay(props) {
           [
             `Using ONLY the current tracker context, list all Status A overdue items for project: "${p}".`,
             "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Level/Block, item/row reference, due date, days overdue.",
+            "Return: Level/Block, item/row reference, due date, supplier.",
             "If the project name doesn't match exactly, show the closest matches and ask which to use.",
             "Do not omit any matches.",
-            "Do not omit any matches.",
-            "run validation"
+            "Do not add items that are not a match and have tick for Status A as YES.",
           ].join("\n"),
       },
       {
@@ -122,10 +121,10 @@ export default function ChatOverlay(props) {
           [
             "Using ONLY the current tracker context, list all projects with First Issue overdue.",
             "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
+            "Return: Project name, Level/Block, item/row reference, due date, supplier.",
             "If a field is missing, state it—do not guess.",
             "Do not omit any matches.",
-            "run validation.",
+            "Do not add items that are not a match and have tick for First Issue as YES.",
           ].join("\n"),
       },
       {
@@ -137,10 +136,10 @@ export default function ChatOverlay(props) {
           [
             `Using ONLY the current tracker context, list all First Issue overdue items for project: "${p}".`,
             "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Level/Block, item/row reference, due date, days overdue.",
+            "Return: Level/Block, item/row reference, due date, supplier.",
             "If the project name doesn't match exactly, show the closest matches and ask which to use.",
             "Do not omit any matches.",
-            "run validation.",
+            "Do not add items that are not a match and have tick for First Issue as YES.",
           ].join("\n"),
       },
       {
