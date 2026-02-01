@@ -90,11 +90,8 @@ export default function ChatOverlay(props) {
         build: () =>
           [
             "Using ONLY the current tracker context, list all projects with Status A overdue.",
-            "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Project name, Level/Block, item/row reference, supplier,.",
+            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
             "If a field is missing, state it—do not guess.",
-            "Do not omit any matches.",
-            "Do not add items that are not a match and have tick for Status A as YES.",
           ].join("\n"),
       },
       {
@@ -105,11 +102,8 @@ export default function ChatOverlay(props) {
         build: (p) =>
           [
             `Using ONLY the current tracker context, list all Status A overdue items for project: "${p}".`,
-            "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Level/Block, item/row reference, due date, supplier.",
+            "Return: Level/Block, item/row reference, due date, days overdue.",
             "If the project name doesn't match exactly, show the closest matches and ask which to use.",
-            "Do not omit any matches.",
-            "Do not add items that are not a match and have tick for Status A as YES.",
           ].join("\n"),
       },
       {
@@ -120,11 +114,8 @@ export default function ChatOverlay(props) {
         build: () =>
           [
             "Using ONLY the current tracker context, list all projects with First Issue overdue.",
-            "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Project name, Level/Block, item/row reference, due date, supplier.",
+            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
             "If a field is missing, state it—do not guess.",
-            "Do not omit any matches.",
-            "Do not add items that are not a match and have tick for First Issue as YES.",
           ].join("\n"),
       },
       {
@@ -135,11 +126,8 @@ export default function ChatOverlay(props) {
         build: (p) =>
           [
             `Using ONLY the current tracker context, list all First Issue overdue items for project: "${p}".`,
-            "Search APP_CONTEXT_JSON.rows only.",
-            "Return: Level/Block, item/row reference, due date, supplier.",
+            "Return: Level/Block, item/row reference, due date, days overdue.",
             "If the project name doesn't match exactly, show the closest matches and ask which to use.",
-            "Do not omit any matches.",
-            "Do not add items that are not a match and have tick for First Issue as YES.",
           ].join("\n"),
       },
       {
@@ -151,12 +139,9 @@ export default function ChatOverlay(props) {
           [
             programmeHint,
             `Using ONLY the PROGRAMME context, list ALL levels across ALL projects that are on site in: "${d}".`,
-            "Search APP_CONTEXT_JSON.rows only.",
             "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
             "Return: Project name, Level/Block, on-site date (or range), and which programme field(s) you used.",
             "Do NOT use tracker rows for this question.",
-            "Do not omit any matches.",
-            "run validation.",
           ].join("\n"),
       },
       {
@@ -168,12 +153,9 @@ export default function ChatOverlay(props) {
           [
             programmeHint,
             `Using ONLY the PROGRAMME context, list ALL levels for project: "${p}" that are on site in: "${d}".`,
-            "Search APP_CONTEXT_JSON.rows only.",
             "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
             "Return: Level/Block, on-site date (or range), and which programme field(s) you used.",
             "Do NOT use tracker rows for this question.",
-            "Do not omit any matches.",
-            "run validation.",
           ].join("\n"),
       },
     ],
@@ -396,7 +378,9 @@ const styles = {
   },
   panel: {
     height: "100%",
-    minHeight: 0, // IMPORTANT so body can scroll and footer stays visible
+    minHeight: 0,
+    overflow: "hidden",
+    boxSizing: "border-box", // IMPORTANT so body can scroll and footer stays visible
     background: "#fff",
     borderLeft: "1px solid #e5e7eb",
     boxShadow: "0 16px 40px rgba(0,0,0,0.16)",
@@ -465,6 +449,7 @@ const styles = {
     flexShrink: 0,
     borderTop: "1px solid #e5e7eb",
     padding: 10,
+    paddingBottom: "calc(10px + env(safe-area-inset-bottom))",
     display: "flex",
     flexDirection: "column",
     gap: 10,
@@ -512,7 +497,7 @@ sendRow: {
     flexShrink: 0,
   },
   textarea: {
-    flex: 1,
+    width: "100%",
     resize: "none",
     background: "#ffffff",
     border: "2px solid #e5e7eb",
@@ -520,15 +505,22 @@ sendRow: {
     padding: 8,
     fontSize: 13,
     lineHeight: 1.3,
-    minHeight: 78,
+    minHeight: 70,
+    maxHeight: 160,
+    overflowY: "auto",
+    boxSizing: "border-box",
   },
   sendBtn: {
-    width: 72,
+    width: "100%",
+    maxWidth: 140,
+    alignSelf: "flex-end",
     borderRadius: 10,
     border: "1px solid #111827",
     background: "#111827",
     color: "#fff",
     fontSize: 13,
+    padding: "10px 12px",
     cursor: "pointer",
+    boxSizing: "border-box",
   },
 };
