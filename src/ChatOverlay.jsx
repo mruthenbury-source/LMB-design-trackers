@@ -27,6 +27,9 @@ export default function ChatOverlay(props) {
   const messages = props.messages ?? props.chatMessages ?? [];
   const busy = !!(props.busy ?? false);
 
+  // show "Thinking..." while the assistant is generating a response
+  const thinking = props.thinking ?? props.isThinking ?? busy;
+
   const externalInput = props.input;
   const externalSetInput = props.setInput;
   const [localInput, setLocalInput] = useState("");
@@ -208,7 +211,10 @@ export default function ChatOverlay(props) {
       <div style={styles.panel}>
         {/* Header */}
         <div style={styles.header}>
+          <div style={styles.headerTitleRow}>
           <div style={styles.headerTitle}>Chat</div>
+          {thinking ? <div style={styles.thinking}>Thinking…</div> : null}
+        </div>
 
           <div style={styles.headerActions}>
             <label style={styles.topCheckboxRow} title="Include historic weekly backups in search results">
@@ -370,7 +376,9 @@ const styles = {
     position: "fixed",
     top: 0,
     right: 0,
-    height: "100vh",
+    height: "100dvh",
+    // Uses dynamic viewport height on mobile
+
     width: 420,
     maxWidth: "95vw",
     zIndex: 9999,
@@ -447,9 +455,13 @@ const styles = {
 
   footer: {
     flexShrink: 0,
+    position: "sticky",
+    bottom: 0,
+    left: 0,
+    right: 0,
     borderTop: "1px solid #e5e7eb",
     padding: 10,
-    paddingBottom: "calc(10px + env(safe-area-inset-bottom))",
+    paddingBottom: "calc(18px + env(safe-area-inset-bottom))",
     display: "flex",
     flexDirection: "column",
     gap: 10,
