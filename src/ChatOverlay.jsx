@@ -90,8 +90,11 @@ export default function ChatOverlay(props) {
         build: () =>
           [
             "Using ONLY the current tracker context, list all projects with Status A overdue.",
-            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
+            "Search APP_CONTEXT_JSON.rows only.",
+            "Return: Project name, Level/Block, item/row reference, due date,.",
             "If a field is missing, state it—do not guess.",
+            "Do not omit any matches.",
+            "run validation"
           ].join("\n"),
       },
       {
@@ -102,8 +105,12 @@ export default function ChatOverlay(props) {
         build: (p) =>
           [
             `Using ONLY the current tracker context, list all Status A overdue items for project: "${p}".`,
+            "Search APP_CONTEXT_JSON.rows only.",
             "Return: Level/Block, item/row reference, due date, days overdue.",
             "If the project name doesn't match exactly, show the closest matches and ask which to use.",
+            "Do not omit any matches.",
+            "Do not omit any matches.",
+            "run validation"
           ].join("\n"),
       },
       {
@@ -114,8 +121,11 @@ export default function ChatOverlay(props) {
         build: () =>
           [
             "Using ONLY the current tracker context, list all projects with First Issue overdue.",
+            "Search APP_CONTEXT_JSON.rows only.",
             "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
             "If a field is missing, state it—do not guess.",
+            "Do not omit any matches.",
+            "run validation.",
           ].join("\n"),
       },
       {
@@ -126,8 +136,11 @@ export default function ChatOverlay(props) {
         build: (p) =>
           [
             `Using ONLY the current tracker context, list all First Issue overdue items for project: "${p}".`,
+            "Search APP_CONTEXT_JSON.rows only.",
             "Return: Level/Block, item/row reference, due date, days overdue.",
             "If the project name doesn't match exactly, show the closest matches and ask which to use.",
+            "Do not omit any matches.",
+            "run validation.",
           ].join("\n"),
       },
       {
@@ -139,9 +152,12 @@ export default function ChatOverlay(props) {
           [
             programmeHint,
             `Using ONLY the PROGRAMME context, list ALL levels across ALL projects that are on site in: "${d}".`,
+            "Search APP_CONTEXT_JSON.rows only.",
             "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
             "Return: Project name, Level/Block, on-site date (or range), and which programme field(s) you used.",
             "Do NOT use tracker rows for this question.",
+            "Do not omit any matches.",
+            "run validation.",
           ].join("\n"),
       },
       {
@@ -153,9 +169,12 @@ export default function ChatOverlay(props) {
           [
             programmeHint,
             `Using ONLY the PROGRAMME context, list ALL levels for project: "${p}" that are on site in: "${d}".`,
+            "Search APP_CONTEXT_JSON.rows only.",
             "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
             "Return: Level/Block, on-site date (or range), and which programme field(s) you used.",
             "Do NOT use tracker rows for this question.",
+            "Do not omit any matches.",
+            "run validation.",
           ].join("\n"),
       },
     ],
