@@ -1,29 +1,25 @@
 {
   "routes": [
-    {
-  "route": "/login",
-  "redirect": "/.auth/login/aad"
-},
-    {
-  "route": "/logout",
-  "redirect": "/.auth/logout"
-},
-    {
-      "route": "/api/state",
-      "allowedRoles": ["anonymous", "authenticated"]
-    },
-    {
-      "route": "/api/unlock",
-      "allowedRoles": ["admin"]
-    },
-    {
-      "route": "/api/tick",
-      "allowedRoles": ["authenticated"]
-    },
-    {
-      "route": "/api/comment",
-      "allowedRoles": ["authenticated"]
+    { "route": "/login", "redirect": "/.auth/login/aad" },
+    { "route": "/logout", "redirect": "/.auth/logout" },
+
+    // Force login for the whole app
+    { "route": "/*", "allowedRoles": ["authenticated"] },
+
+    // API rules (these are fine, but state probably shouldn't be anonymous if the app requires login)
+    { "route": "/api/state", "allowedRoles": ["authenticated"] },
+    { "route": "/api/unlock", "allowedRoles": ["admin"] },
+    { "route": "/api/tick", "allowedRoles": ["authenticated"] },
+    { "route": "/api/comment", "allowedRoles": ["authenticated"] }
+  ],
+  "navigationFallback": {
+    "rewrite": "/index.html"
+  },
+  "responseOverrides": {
+    "401": {
+      "redirect": "/login"
     }
-  ]
+  }
 }
+
 
