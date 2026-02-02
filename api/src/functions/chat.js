@@ -230,14 +230,91 @@ function diffCurrentVsBackup(currentCtx, backupIndex) {
 
 /* ---------------- chat function ---------------- */
 
+function trimText(s, max = 1200) {
+  if (typeof s !== "string") return s;
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+function compactMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  // Drop UI error echoes to avoid poisoning the conversation and wasting tokens
+  const cleaned = messages.filter(
+    (m) => !(m?.role === "assistant" && typeof m?.content === "string" && m.content.startsWith("Chat error:"))
+  );
+  // Keep the most recent turns only (prevents unbounded growth)
+  const last = cleaned.slice(-10);
+  return last.map((m) => ({
+    role: m?.role,
+    content: trimText(String(m?.content ?? ""), 2000),
+  }));
+}
+
+function compactAppContext(ctx) {
+  if (!ctx || typeof ctx !== "object") return {};
+  // Keep stable, small, high-signal fields; compact large collections to stay within model limits.
+  const out = {
+    app: ctx.app,
+    today: ctx.today,
+    view: ctx.view,
+    counts: ctx.counts,
+    activeProject: ctx.activeProject ? { id: ctx.activeProject.id, name: ctx.activeProject.name } : undefined,
+    activePage: ctx.activePage ? { id: ctx.activePage.id, name: ctx.activePage.name, isMaster: ctx.activePage.isMaster } : undefined,
+  };
+
+  // Programme data is used for programme questions; keep it, but don't pretty-print later.
+  if (Array.isArray(ctx.programme)) out.programme = ctx.programme;
+  if (ctx.programmeIndex && typeof ctx.programmeIndex === "object") out.programmeIndex = ctx.programmeIndex;
+
+  // Rows are the primary dataset. Keep ALL rows, but strip to the fields your system prompt relies on.
+  if (Array.isArray(ctx.rows)) {
+    out.rows = ctx.rows.map((r) => ({
+      key: r?.key,
+      project: r?.project,
+      responsibility: r?.responsibility,
+      supplier: r?.supplier,
+      item: r?.item,
+      requiredOnSite: r?.requiredOnSite,
+      statusA: r?.statusA,
+      firstIssue: r?.firstIssue,
+      timeframe: r?.timeframe,
+      traffic: r?.traffic,
+      ticks: r?.ticks,
+      // searchText can be huge; keep it but trim per row to avoid context overflow.
+      searchText: trimText(r?.searchText ? String(r.searchText) : "", 500),
+      comments: trimText(r?.comments ? String(r.comments) : "", 800),
+    }));
+  }
+
+  // The UI "sample" block can get very large; keep only a small slice.
+  const overdueTop = ctx?.sample?.overdueTop;
+  if (Array.isArray(overdueTop)) {
+    out.sample = {
+      overdueTop: overdueTop.slice(0, 12).map((x) => ({
+        project: x.project,
+        responsibility: x.responsibility,
+        supplier: x.supplier,
+        item: x.item,
+        requiredOnSite: x.requiredOnSite,
+        statusA: x.statusA,
+        traffic: x.traffic,
+        ticks: x.ticks,
+      })),
+    };
+  }
+
+  return out;
+}
+
+
 app.http("chat", {
   methods: ["POST"],
   authLevel: "anonymous",
   handler: async (req) => {
     try {
       const body = await req.json().catch(() => ({}));
-      const messages = body?.messages;
-      const appContext = body?.context;
+      const messages = compactMessages(body?.messages);
+      const appContextRaw = body?.context;
+      const appContext = compactAppContext(appContextRaw);
       const searchBackups = !!body?.searchBackups;
 
       const apiKey = process.env.OPENAI_API_KEY;
@@ -374,12 +451,12 @@ Prefer accuracy over brevity.
 
       const input = [
         { role: "system", content: systemText },
-        { role: "system", content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {}, null, 2)}` },
+        { role: "system", content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {})}` },
         ...(programmeIndexMatch
-          ? [{ role: "system", content: `PROGRAMME_INDEX_MATCH:\n${JSON.stringify(programmeIndexMatch, null, 2)}` }]
+          ? [{ role: "system", content: `PROGRAMME_INDEX_MATCH:\n${JSON.stringify(programmeIndexMatch)}` }]
           : []),
         ...(searchBackups
-          ? [{ role: "system", content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {}, null, 2)}` }]
+          ? [{ role: "system", content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {})}` }]
           : []),
         ...(Array.isArray(messages) ? messages : []),
       ];
