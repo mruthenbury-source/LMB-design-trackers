@@ -23,7 +23,16 @@ function getContainer() {
   return service.getContainerClient(containerName);
 }
 
-app.http("backupWeekly", {
+// NOTE: Function *name* must be unique across triggers. This repo already has
+// a timer-triggered function named `backupWeekly` (see backupWeekly.js).
+// If we reused that name here, Azure Functions can fail to index functions,
+// resulting in 404s for all /api routes in Azure Static Web Apps.
+//
+// So we use a unique function name, but keep the same HTTP route expected by
+// the frontend: GET /api/backupWeekly
+
+app.http("backupWeeklyHttp", {
+  route: "backupWeekly",
   methods: ["GET"],
   authLevel: "anonymous",
   handler: async (_req, context) => {
