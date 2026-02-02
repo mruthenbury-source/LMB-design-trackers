@@ -2,6 +2,104 @@ function YESNO(b){return b?"YES":"NO";}
 import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
 
+/* ---------------- context compaction ---------------- */
+
+function truncateStr(s, max = 400) {
+  const v = (s ?? "").toString();
+  if (v.length <= max) return v;
+  return v.slice(0, max) + "…";
+}
+
+function jsonByteLen(x) {
+  try {
+    return Buffer.byteLength(JSON.stringify(x));
+  } catch {
+    return Infinity;
+  }
+}
+
+function compactRows(rows, { includeComments, searchTextMax }) {
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    out.push({
+      key: safeStr(r?.key),
+      project: safeStr(r?.project),
+      responsibility: safeStr(r?.responsibility),
+      supplier: safeStr(r?.supplier),
+      item: safeStr(r?.item),
+      requiredOnSite: safeStr(r?.requiredOnSite),
+      statusA: safeStr(r?.statusA),
+      firstIssue: safeStr(r?.firstIssue),
+      timeframe: safeStr(r?.timeframe),
+      totalDurationDays: r?.totalDurationDays ?? null,
+      ticks: r?.ticks && typeof r.ticks === "object" ? r.ticks : (r?.ticksBool ?? null),
+      comments: includeComments ? truncateStr(r?.comments, 500) : undefined,
+      commentsCount: r?.commentsCount ?? undefined,
+      status: safeStr(r?.status),
+      traffic: safeStr(r?.traffic),
+      searchText: truncateStr(r?.searchText, searchTextMax),
+    });
+  }
+  return out;
+}
+
+function compactContext(appContext) {
+  // Keep behaviour, but avoid OpenAI request failures caused by extremely large context.
+  const ctx = (appContext && typeof appContext === "object") ? appContext : {};
+  const base = {
+    today: safeStr(ctx.today),
+    programme: Array.isArray(ctx.programme) ? ctx.programme : [],
+    programmeIndex: (ctx.programmeIndex && typeof ctx.programmeIndex === "object") ? ctx.programmeIndex : {},
+    rows: Array.isArray(ctx.rows) ? ctx.rows : [],
+  };
+
+  // Attempt progressively more compact representations until the payload is a sane size.
+  const MAX_BYTES = Number(process.env.OPENAI_CONTEXT_MAX_BYTES || 350_000);
+
+  // 1) full context as-is (if small)
+  if (jsonByteLen(base) <= MAX_BYTES) return base;
+
+  // 2) compact rows (keep comments)
+  const v2 = {
+    today: base.today,
+    programme: base.programme,
+    programmeIndex: base.programmeIndex,
+    rows: compactRows(base.rows, { includeComments: true, searchTextMax: 500 }),
+  };
+  if (jsonByteLen(v2) <= MAX_BYTES) return v2;
+
+  // 3) compact rows (drop comments)
+  const v3 = {
+    today: base.today,
+    programme: base.programme,
+    programmeIndex: base.programmeIndex,
+    rows: compactRows(base.rows, { includeComments: false, searchTextMax: 450 }),
+  };
+  if (jsonByteLen(v3) <= MAX_BYTES) return v3;
+
+  // 4) keep only authoritative indices + minimal row fields
+  const v4 = {
+    today: base.today,
+    programmeIndex: base.programmeIndex,
+    rows: compactRows(base.rows, { includeComments: false, searchTextMax: 320 }).map((r) => ({
+      key: r.key,
+      project: r.project,
+      responsibility: r.responsibility,
+      supplier: r.supplier,
+      item: r.item,
+      requiredOnSite: r.requiredOnSite,
+      statusA: r.statusA,
+      firstIssue: r.firstIssue,
+      timeframe: r.timeframe,
+      ticks: r.ticks,
+      status: r.status,
+      traffic: r.traffic,
+      searchText: r.searchText,
+    })),
+  };
+  return v4;
+}
+
 /* ---------------- blob helpers ---------------- */
 
 function getBlobClients() {
@@ -237,8 +335,13 @@ app.http("chat", {
     try {
       const body = await req.json().catch(() => ({}));
       const messages = body?.messages;
-      const appContext = body?.context;
+      const appContextRaw = body?.context;
       const searchBackups = !!body?.searchBackups;
+
+      // The UI can send a very large context object. To prevent intermittent
+      // OpenAI 4xx errors (which surface as 500 to the UI), we compact the
+      // context server-side while preserving the important fields.
+      const appContext = compactContext(appContextRaw);
 
       const apiKey = process.env.OPENAI_API_KEY;
       const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
