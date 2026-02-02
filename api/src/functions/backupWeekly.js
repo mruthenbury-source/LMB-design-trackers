@@ -26,8 +26,8 @@ async function streamToString(readable) {
 }
 
 app.timer("backupWeekly", {
-  // Every Monday at 09:00 UTC (NCRONTAB format) :contentReference[oaicite:1]{index=1}
-  schedule: "0 0 9 * * 1",
+  // Every Monday at 02:00 UTC (NCRONTAB format) :contentReference[oaicite:1]{index=1}
+  schedule: "0 0 2 * * 1",
   handler: async (myTimer, context) => {
     const conn = process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
     const containerName = process.env.STATE_CONTAINER || "workback";
