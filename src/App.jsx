@@ -1,4 +1,49 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// AUTO_WEEKLY_BACKUP (client-triggered)
+// On Static Web Apps Free tier, timers do not run. We trigger the weekly backup when the app is open.
+const WEEKLY_BACKUP_LS_KEY = "lmb_weekly_backup_last_weekKey";
+
+function getUKParts(d = new Date()) {
+  // Convert to Europe/London using Intl (avoids device timezone mismatch)
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    weekday: "short",
+  });
+  const parts = fmt.formatToParts(d).reduce((acc, p) => {
+    if (p.type !== "literal") acc[p.type] = p.value;
+    return acc;
+  }, {});
+  // weekday is like Mon, Tue...
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    weekday: parts.weekday,
+  };
+}
+
+function ukYMD(parts) {
+  const y = String(parts.year);
+  const m = String(parts.month).padStart(2, "0");
+  const d = String(parts.day).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function isUKMondayAfter10am(parts) {
+  if (parts.weekday !== "Mon") return false;
+  if (parts.hour > 10) return true;
+  if (parts.hour < 10) return false;
+  return parts.minute >= 0;
+}
 import ChatOverlay from "./ChatOverlay.jsx";
 
 const LS_KEY = "design-programme-workback:v16";
@@ -55,36 +100,42 @@ function diffDaysUTC(startISO, finishISO) {
 }
 /* ---------- UI helpers ---------- */
 
+function summaryBorderStyle(it) {
+  // Mirror the tracker row intent (late / Status A approved / First Issue issued / Done).
+  // Return a COLOR only (we apply it via inset boxShadow for reliable table rendering).
+  if (it.status === "overdue") return "#EF4444";      // red (late)
+  if (it.completed) return "#10B981";                 // green (done)
+  if (it.firstIssueDone) return "#2563EB";            // blue (first issue)
+  if (it.statusADone) return "#F59E0B";               // amber (status A)
+  return "transparent";
+}
+
+function summaryBorderColor(it) {
+  // Match tracker intent / priority
+  if (it.notRequired) return "rgba(17,24,39,0.25)"; // “Not required” muted stripe
+  if (it.status === "overdue") return "#EF4444";    // overdue red
+  if (it.completed) return "#10B981";               // done green
+  if (it.firstIssueDone) return "#2563EB";          // first issue ticked blue
+  if (it.statusADone) return "#F59E0B";             // Status A ticked amber
+  return "#E5E7EB";                                 // neutral
+}
 
 function datePillStyle({ row, dateKey }) {
-  // Not required → always muted
+  // Not required always grey
   if (row.notRequired) return styles.pillMuted;
 
-  // Completed row → everything green
+  // Completed overrides everything
   if (row.completed) return styles.pillDone;
 
-  // Extract the actual date for this pill
-  const dateISO = row[dateKey];
-  const date = parseISO(dateISO);
-  if (!date) return styles.pillNeutral;
-
-  const today = parseISO(isoToday());
-  const daysLeft = Math.ceil((date.getTime() - today.getTime()) / dayMs());
-
-  // Ticked milestones
+  // Specific ticked milestones
   if (dateKey === "statusA" && row.statusADone) return styles.pillDone;
   if (dateKey === "firstIssue" && row.firstIssueDone) return styles.pillDone;
 
-  // 🔴 Late (date-specific)
-  if (daysLeft < 0) return styles.pillLate;
+  // Late logic (same as tracker)
+  if (row.status === "overdue") return styles.pillLate;
 
-  // 🟠 Due soon (< 7 days)
-  if (daysLeft <= 7) return styles.pillDueSoon;
-
-  // Default
   return styles.pillNeutral;
 }
-
 
 
 /* ---------- schedule model ---------- */
@@ -171,11 +222,11 @@ function TrafficKeyDotsOnly() {
     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <span style={styles.keyItem}>
         <TrafficDot status="green" />
-        <span style={styles.keyText}>Completed</span>
+        <span style={styles.keyText}>On track</span>
       </span>
       <span style={styles.keyItem}>
         <TrafficDot status="amber" />
-        <span style={styles.keyText}>Due Soon</span>
+        <span style={styles.keyText}>Due soon</span>
       </span>
       <span style={styles.keyItem}>
         <TrafficDot status="red" />
@@ -290,7 +341,6 @@ function defaultProject(name = "New Project") {
   return {
     id: uid(),
     name,
-    homeComments: [],
     master: [defaultMasterRow()],
     responsibilities: [defaultResponsibility()],
     pages: [
@@ -550,49 +600,22 @@ export default function App() {
     return roles.includes("administrator") || roles.includes("admin");
   }, [authUser, authRoles]);
 
-  const isManager = useMemo(() => {
-    if (!authUser || authUser === null) return false;
-    const roles = authRoles.map((r) => String(r || "").toLowerCase());
-    return roles.includes("manager");
-  }, [authUser, authRoles]);
-
-  const isTeam = useMemo(() => {
-    if (!authUser || authUser === null) return false;
-    const roles = authRoles.map((r) => String(r || "").toLowerCase());
-    return roles.includes("team");
-  }, [authUser, authRoles]);
-
-  // "Guest" stays exactly as it currently is: authenticated non-admin users who are NOT Manager/Team
-  // (i.e. supplier-scoped access).
-  const isGuest = !!authUser && !isAdmin && !isManager && !isTeam;
-
-  const NO_PERM_MSG = "you currently dont have permission to change this field - please contact admin";
-  const deny = useCallback(() => {
-    window.alert(NO_PERM_MSG);
-  }, []);
-
-  const canSeeAll = isAdmin || isManager || isTeam;
-  const canEditProjectHomeDates = isAdmin || isManager; // start/finish only
-  const canEditProjectHomeStructure = isAdmin; // add/delete blocks/levels, edit names
-  const canToggleDoneCheckbox = isAdmin || isManager; // tracker page "Done" checkbox
-  const canTickMilestones = isAdmin || isManager || isGuest; // manager + existing guest behaviour
-  const canEditTrackerFields = isAdmin; // everything else on tracker page
-  const canEditDefaultTimeframes = isAdmin; // global TF inputs
+  const isGuest = !!authUser && !isAdmin;
 
   const hasSupplierAccess = useCallback(
     (supplier) => {
-      if (canSeeAll) return true;
+      if (isAdmin) return true;
       const s = String(supplier || "").trim().toLowerCase();
       if (!s) return false;
       const roles = authRoles.map((r) => String(r || "").trim().toLowerCase());
       return roles.includes(s) || roles.includes(`supplier:${s}`);
     },
-    [canSeeAll, authRoles]
+    [isAdmin, authRoles]
   );
 
   // Guests only see projects that have at least one tracker page for their supplier
   const visibleProjects = useMemo(() => {
-    if (canSeeAll) return projects;
+    if (isAdmin) return projects;
     if (!projects?.length) return [];
     return projects.filter((p) =>
       (p.pages || []).some((pg) => {
@@ -603,7 +626,7 @@ export default function App() {
         return supplier && hasSupplierAccess(supplier);
       })
     );
-  }, [projects, canSeeAll, hasSupplierAccess]);
+  }, [projects, isAdmin, hasSupplierAccess]);
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -806,6 +829,50 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+
+// AUTO_WEEKLY_BACKUP: Run (once per UK Monday) after 10am when the app is open.
+// This calls an HTTP API that creates the backup blob if it doesn't already exist for that weekKey.
+useEffect(() => {
+  let cancelled = false;
+
+  async function runWeeklyBackupIfDue() {
+    try {
+      const parts = getUKParts(new Date());
+      if (!isUKMondayAfter10am(parts)) return;
+
+      const weekKey = ukYMD(parts); // Monday date in UK (YYYY-MM-DD)
+      const last = localStorage.getItem(WEEKLY_BACKUP_LS_KEY);
+      if (last === weekKey) return;
+
+      // Call API to create backup (idempotent on the server too)
+      const res = await fetch("/api/backupWeekly", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ weekKey }),
+      });
+
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      if (cancelled) return;
+
+      if (data?.ok) {
+        localStorage.setItem(WEEKLY_BACKUP_LS_KEY, weekKey);
+      }
+    } catch {
+      // ignore (noisy errors aren't helpful for users)
+    }
+  }
+
+  // run on mount and then every 5 minutes while open
+  runWeeklyBackupIfDue();
+  const t = setInterval(runWeeklyBackupIfDue, 5 * 60 * 1000);
+
+  return () => {
+    cancelled = true;
+    clearInterval(t);
+  };
+}, []);
   
 
 
@@ -1725,8 +1792,8 @@ return {
     // Only decide initial landing once we have BOTH auth + blob state
     didInitialRouteRef.current = true;
 
-    if (canSeeAll) {
-      // Admin/Manager/Team always starts on Home
+    if (isAdmin) {
+      // Admin always starts on Home
       setView(VIEW.LANDING);
       return;
     }
@@ -1747,7 +1814,7 @@ return {
 
     if (allowed.length) setActivePageId(allowed[0].id);
     setView(VIEW.PROJECT);
-  }, [isBooting, canSeeAll, visibleProjects, hasSupplierAccess]);
+  }, [isBooting, isAdmin, visibleProjects, hasSupplierAccess]);
 
   if (isBooting) {
     return (
@@ -1861,14 +1928,7 @@ return {
                   ))}
                 </select>
 
-                <button
-                  style={styles.primaryBtn}
-                  onClick={() => {
-                    if (!isAdmin) return deny();
-                    addProject();
-                  }}
-                  disabled={!isAdmin}
-                >
+                <button style={styles.primaryBtn} onClick={addProject}>
                   + Project
                 </button>
 
@@ -1878,9 +1938,7 @@ return {
               
               <button
   style={styles.dangerBtn}
-  disabled={!isAdmin}
   onClick={() => {
-    if (!isAdmin) return deny();
     if (!activeProject) return;
 
     const ok = window.confirm(
@@ -2046,112 +2104,130 @@ return {
             </div>
 
             <div style={styles.card}>
-  <div style={styles.tableTop}>
-    <div style={{ display: "grid", gap: 8 }}>
-      {/* If you want to REMOVE the dot legend too, delete this line */}
-      <TrafficKeyDotsOnly />
+              <div style={styles.tableTop}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <TrafficKeyDotsOnly />
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
-          Project
-          <select
-            style={{ ...styles.input, width: 220 }}
-            value={summaryProjectId}
-            onChange={(e) => setSummaryProjectId(e.target.value)}
-          >
-            <option value="all">All projects</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
+                      Project
+                      <select style={{ ...styles.input, width: 220 }} value={summaryProjectId} onChange={(e) => setSummaryProjectId(e.target.value)}>
+                        <option value="all">All projects</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
 
-        <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
-          Supplier
-          <select
-            style={{ ...styles.input, width: 220 }}
-            value={summarySupplier}
-            onChange={(e) => setSummarySupplier(e.target.value)}
-          >
-            <option value="all">All suppliers</option>
-            {supplierOptions.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-    </div>
+                    <label style={{ display: "grid", gap: 4, fontSize: 12, color: "#374151" }}>
+                      Supplier
+                      <select style={{ ...styles.input, width: 220 }} value={summarySupplier} onChange={(e) => setSummarySupplier(e.target.value)}>
+                        <option value="all">All suppliers</option>
+                        {supplierOptions.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <FilterPill label="Overdue" active={summaryFilter === "overdue"} onClick={() => setSummaryFilter("overdue")} />
+                  <FilterPill label="Ongoing" active={summaryFilter === "ongoing"} onClick={() => setSummaryFilter("ongoing")} />
+                  <FilterPill label="Done" active={summaryFilter === "done"} onClick={() => setSummaryFilter("done")} />
+                  <FilterPill label="All" active={summaryFilter === "all"} onClick={() => setSummaryFilter("all")} />
+                </div>
+              </div>
+
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Status</th>
+                      <th style={styles.th}>●</th>
+                      <th style={styles.th}>Project</th>
+                      <th style={styles.th}>Responsibility</th>
+                      <th style={styles.th}>Supplier</th>
+                      <th style={styles.th}>Item</th>
+                      <th style={styles.th}>Req</th>
+                      <th style={styles.th}>Status A</th>
+                      <th style={styles.th}>First</th>
+                      <th style={styles.th}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+  {filteredSummary.map((it) => {
+    const stripe = summaryBorderColor(it);
+
+    return (
+      <tr
+        key={`${it.projectId}:${it.pageId}:${it.rowId}`}
+        style={it.status === "overdue" ? styles.trLate : it.status === "done" ? styles.trDone : undefined}
+      >
+        <td
+          style={{
+            ...styles.td,
+            // Paint a 4px stripe on the left inside the cell (table-safe)
+            backgroundImage: `linear-gradient(90deg, ${stripe} 0 4px, transparent 4px 100%)`,
+            backgroundRepeat: "no-repeat",
+          }}
+        >
+          <StatusBadge status={it.status} />
+        </td>
+
+        <td style={styles.tdCenter}>
+          <TrafficDot status={it.traffic} />
+        </td>
+        <td style={styles.td}>{it.projectName}</td>
+        <td style={styles.td}>{it.pageName}</td>
+        <td style={styles.td}>{it.supplier || "—"}</td>
+        <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
+        <td style={styles.td}>
+  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "requiredOnSite" }) }}>
+    {it.requiredOnSite || "—"}
   </div>
+</td>
 
-  <div style={styles.tableWrap}>
-    <table style={styles.table}>
-      <thead>
-        <tr>         
-          <th style={styles.th}>Project</th>
-          <th style={styles.th}>Responsibility</th>
-          <th style={styles.th}>Supplier</th>
-          <th style={styles.th}>Item</th>
-          <th style={styles.th}>Req</th>
-          <th style={styles.th}>Status A</th>
-          <th style={styles.th}>First</th>
-          <th style={styles.th}></th>
-        </tr>
-      </thead>
-
-      <tbody>
-        {filteredSummary.map((it) => (
-          <tr key={`${it.projectId}:${it.pageId}:${it.rowId}`}>
-
-        
-            <td style={styles.td}>{it.projectName}</td>
-            <td style={styles.td}>{it.pageName}</td>
-            <td style={styles.td}>{it.supplier || "—"}</td>
-            <td style={{ ...styles.td, ...styles.wrap }}>{it.title}</td>
-
-            <td style={styles.td}>
-              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "requiredOnSite" }) }}>
-                {it.requiredOnSite || "—"}
-              </div>
-            </td>
-
-            <td style={styles.td}>
-              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "statusA" }) }}>
-                {it.statusA || "—"}
-              </div>
-            </td>
-
-            <td style={styles.td}>
-              <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "firstIssue" }) }}>
-                {it.firstIssue || "—"}
-              </div>
-            </td>
-
-            <td style={styles.td}>
-              <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
-                Open
-              </button>
-            </td>
-          </tr>
-        ))}
-
-        {!filteredSummary.length ? (
-          <tr>
-            <td style={styles.td} colSpan={9}>
-              <div style={{ color: "#6B7280" }}>No items.</div>
-            </td>
-          </tr>
-        ) : null}
-      </tbody>
-    </table>
+<td style={styles.td}>
+  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "statusA" }) }}>
+    {it.statusA || "—"}
   </div>
-</div>
+</td>
+
+<td style={styles.td}>
+  <div style={{ ...styles.pillCompact, ...datePillStyle({ row: it, dateKey: "firstIssue" }) }}>
+    {it.firstIssue || "—"}
+  </div>
+</td>
+
+        <td style={styles.td}>
+          <button style={styles.smallBtn} onClick={() => jumpToItem(it)}>
+            Open
+          </button>
+        </td>
+      </tr>
+    );
+  })}
+
+  {!filteredSummary.length ? (
+    <tr>
+      <td style={styles.td} colSpan={10}>
+        <div style={{ color: "#6B7280" }}>No items.</div>
+      </td>
+    </tr>
+  ) : null}
+</tbody>
+
+
+                </table>
+              </div>
             </div>
           </div>
-
+        </div>
 
         {!isGuest && (
           <ChatOverlay
@@ -2187,14 +2263,6 @@ return {
           authUser={authUser}
           isAdmin={isAdmin}
           isGuest={isGuest}
-          canSeeAll={canSeeAll}
-          deny={deny}
-          canEditProjectHomeDates={canEditProjectHomeDates}
-          canEditProjectHomeStructure={canEditProjectHomeStructure}
-          canToggleDoneCheckbox={canToggleDoneCheckbox}
-          canTickMilestones={canTickMilestones}
-          canEditTrackerFields={canEditTrackerFields}
-          canEditDefaultTimeframes={canEditDefaultTimeframes}
           hasSupplierAccess={hasSupplierAccess}
           setActiveProjectId={setActiveProjectId}
           setActivePageId={setActivePageId}
@@ -2257,14 +2325,6 @@ function ProjectView(props) {
     authUser,
     isAdmin,
     isGuest,
-    canSeeAll,
-    deny,
-    canEditProjectHomeDates,
-    canEditProjectHomeStructure,
-    canToggleDoneCheckbox,
-    canTickMilestones,
-    canEditTrackerFields,
-    canEditDefaultTimeframes,
     hasSupplierAccess,
     setActiveProjectId,
     setActivePageId,
@@ -2296,7 +2356,7 @@ function ProjectView(props) {
   // Pages a guest is allowed to see inside the active project
   const allowedPages = useMemo(() => {
     if (!activeProject?.pages?.length) return [];
-    if (canSeeAll) return activeProject.pages;
+    if (isAdmin) return activeProject.pages;
     return (activeProject.pages || []).filter((pg) => {
       if (pg.meta?.isMaster) return false;
       const respId = pg.meta?.responsibilityId;
@@ -2304,7 +2364,7 @@ function ProjectView(props) {
       const supplier = String(resp?.supplier || "").trim();
       return supplier && hasSupplierAccess(supplier);
     });
-  }, [activeProject, canSeeAll, hasSupplierAccess]);
+  }, [activeProject, isAdmin, hasSupplierAccess]);
 
   // If a guest lands on Project Home, immediately jump to their first allowed tracker page
   useEffect(() => {
@@ -2316,53 +2376,30 @@ function ProjectView(props) {
   }, [isGuest, activeProject, activePage, allowedPages, setActivePageId]);
 
   // Comments modal state (append-only; each saved comment is locked)
-  const [commentTarget, setCommentTarget] = useState(null); // { type: 'tracker' | 'master', id: string }
+  const [commentRowId, setCommentRowId] = useState(null);
   const [commentName, setCommentName] = useState("");
   const [commentText, setCommentText] = useState("");
 
-  // (Removed) Project Home general comments section – comments are only per Block/Level row.
-
   const commentRow = useMemo(() => {
-    if (!commentTarget) return null;
-    if (commentTarget.type === 'tracker') {
-      const rows = activePage?.rows || [];
-      return rows.find((r) => r.id === commentTarget.id) || null;
-    }
-    // master level comments
-    const master = activeProject?.master || [];
-    for (const m of master) {
-      for (const lv of (m.levels || [])) {
-        if (lv.id === commentTarget.id) {
-          return { ...lv, _commentLabel: `${m.block || m.zone || 'Block'} • ${lv.level || lv.name || 'Level'}` };
-        }
-      }
-    }
-    return null;
-  }, [commentTarget, activePage, activeProject]);
+    if (!commentRowId) return null;
+    const rows = activePage?.rows || [];
+    return rows.find((r) => r.id === commentRowId) || null;
+  }, [commentRowId, activePage]);
 
   function openComments(row) {
     if (!row || row.kind === "header") return;
-    setCommentTarget({ type: 'tracker', id: row.id });
-    setCommentName(authUser?.userDetails || "");
-    setCommentText("");
-  }
-
-  function openMasterComments(masterId, level) {
-    if (!level) return;
-    // guests shouldn't be editing/commenting on Project Home
-    if (isGuest) return deny();
-    setCommentTarget({ type: 'master', id: level.id });
+    setCommentRowId(row.id);
     setCommentName(authUser?.userDetails || "");
     setCommentText("");
   }
 
   function closeComments() {
-    setCommentTarget(null);
+    setCommentRowId(null);
     setCommentText("");
   }
 
   function saveComment() {
-    if (!commentRow || !commentTarget) return;
+    if (!commentRow) return;
     const name = clean(commentName) || (authUser?.userDetails || authUser?.userId || "guest");
     const text = clean(commentText);
     if (!text) return;
@@ -2377,27 +2414,12 @@ function ProjectView(props) {
       lockedAt: new Date().toISOString(),
     };
 
-    
-    if (commentTarget.type === 'tracker') {
-      updateRow(commentRow.id, {
-        comments: [...(Array.isArray(commentRow.comments) ? commentRow.comments : []), next],
-      });
-    } else {
-      // master level comments stored on the level object
-      const master = activeProject?.master || [];
-      for (const m of master) {
-        const lv = (m.levels || []).find((x) => x.id === commentTarget.id);
-        if (lv) {
-          updateLevel(m.id, lv.id, { comments: [...(Array.isArray(lv.comments) ? lv.comments : []), next] });
-          break;
-        }
-      }
-    }
+    updateRow(commentRow.id, {
+      comments: [...(Array.isArray(commentRow.comments) ? commentRow.comments : []), next],
+    });
 
-        setCommentText("");
+    setCommentText("");
   }
-
-  // (Removed) saveHomeComment()
 
   // Guest: if they land on Project Home, push them to their first allowed tracker page
   useEffect(() => {
@@ -2429,16 +2451,10 @@ function tickMilestone(row, field, checked) {
 
   const locked = !!row?.locks?.[field];
 
-  // No permission to change milestone fields
-  if (!canTickMilestones) {
-    deny();
-    return;
-  }
-
-  // Supplier Guests + Manager: can only tick ONCE if not locked; cannot untick
-  if (!isAdmin) {
-    if (!checked) return; // cannot untick
-    if (locked) return; // locked = can't change
+  // Guests: can only tick ONCE if not locked; cannot untick
+  if (isGuest) {
+    if (!checked) return;          // guests cannot untick
+    if (locked) return;            // locked = can't change
 
     const ok = window.confirm("Once ticked this will be locked and only administrator can unlock");
     if (!ok) return;
@@ -2466,7 +2482,7 @@ function tickMilestone(row, field, checked) {
   });
 }
   // ✅ selector block in same place for BOTH Project Home and responsibility pages
-  const projectOptions = canSeeAll ? projects : visibleProjects?.length ? visibleProjects : projects;
+  const projectOptions = isAdmin ? projects : visibleProjects?.length ? visibleProjects : projects;
 
   const SelectorBar = () => (
     <div style={styles.selectorBar}>
@@ -2480,7 +2496,7 @@ function tickMilestone(row, field, checked) {
             setActiveProjectId(pid);
             const proj = (visibleProjects || projects).find((p) => p.id === pid) || null;
             if (!proj) return;
-            if (canSeeAll) {
+            if (isAdmin) {
               const mp = proj.pages?.find((x) => x.meta?.isMaster) || proj.pages?.[0];
               setActivePageId(mp?.id || null);
             } else {
@@ -2535,7 +2551,7 @@ function tickMilestone(row, field, checked) {
         </div>
         <div style={styles.headerButtons}>
                 {saveButton}
-          {canSeeAll ? (
+          {isAdmin ? (
             <>
               <button style={styles.secondaryBtn} onClick={() => setView(VIEW.LANDING)}>
                 Home
@@ -2560,13 +2576,9 @@ function tickMilestone(row, field, checked) {
           <input
             style={{ ...styles.input, width: "100%" }}
             value={activeProject?.name || ""}
-            onChange={(e) => {
-              if (!activeProject) return;
-              if (!isAdmin) return deny();
-              updateProject(activeProject.id, { name: e.target.value });
-            }}
+            onChange={(e) => activeProject && updateProject(activeProject.id, { name: e.target.value })}
             placeholder="Project name"
-            disabled={!activeProject || isGuest}
+            disabled={!isAdmin}
           />
         </div>
       </div>
@@ -2586,10 +2598,7 @@ function tickMilestone(row, field, checked) {
           type="number"
           min={0}
           value={globalDaysReqToStatusA}
-          onChange={(e) => {
-            if (!canEditDefaultTimeframes) return deny();
-            setGlobalDaysReqToStatusA(clampInt(e.target.value, 0));
-          }}
+          onChange={(e) => setGlobalDaysReqToStatusA(clampInt(e.target.value, 0))}
         />
       </label>
       <label style={styles.label}>
@@ -2599,10 +2608,7 @@ function tickMilestone(row, field, checked) {
           type="number"
           min={0}
           value={globalDaysStatusAToFirstIssue}
-          onChange={(e) => {
-            if (!canEditDefaultTimeframes) return deny();
-            setGlobalDaysStatusAToFirstIssue(clampInt(e.target.value, 0));
-          }}
+          onChange={(e) => setGlobalDaysStatusAToFirstIssue(clampInt(e.target.value, 0))}
         />
       </label>
     </div>
@@ -2625,14 +2631,7 @@ function tickMilestone(row, field, checked) {
               <div>
                 <h3 style={styles.h3}>Blocks / Zones</h3>
               </div>
-              <button
-                style={styles.primaryBtn}
-                onClick={() => {
-                  if (!canEditProjectHomeStructure) return deny();
-                  addMasterRow();
-                }}
-                disabled={!activeProject}
-              >
+              <button style={styles.primaryBtn} onClick={addMasterRow} disabled={!activeProject}>
                 + Block / Zone
               </button>
             </div>
@@ -2646,8 +2645,7 @@ function tickMilestone(row, field, checked) {
                     <th style={styles.th}>Start</th>
                     <th style={styles.th}>Finish</th>
                     <th style={styles.th}>Duration</th>
-                    <th style={styles.th}>Actions</th>
-                    <th style={styles.th}>💬</th>
+                    <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2667,10 +2665,7 @@ function tickMilestone(row, field, checked) {
                                   style={styles.input}
                                   placeholder="e.g. Block A / Zone 1"
                                   value={m.blockZone}
-                                  onChange={(e) => {
-                                    if (!canEditProjectHomeStructure) return deny();
-                                    updateMasterRow(m.id, { blockZone: e.target.value });
-                                  }}
+                                  onChange={(e) => updateMasterRow(m.id, { blockZone: e.target.value })}
                                 />
                               </td>
                             ) : null}
@@ -2680,10 +2675,7 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 placeholder={`Level ${idx + 1}`}
                                 value={lv.name}
-                                onChange={(e) => {
-                                  if (!canEditProjectHomeStructure) return deny();
-                                  updateLevel(m.id, lv.id, { name: e.target.value });
-                                }}
+                                onChange={(e) => updateLevel(m.id, lv.id, { name: e.target.value })}
                               />
                             </td>
 
@@ -2692,10 +2684,7 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 type="date"
                                 value={lv.startDate}
-                                onChange={(e) => {
-                                  if (!canEditProjectHomeDates) return deny();
-                                  updateLevel(m.id, lv.id, { startDate: e.target.value });
-                                }}
+                                onChange={(e) => updateLevel(m.id, lv.id, { startDate: e.target.value })}
                               />
                             </td>
 
@@ -2704,10 +2693,7 @@ function tickMilestone(row, field, checked) {
                                 style={styles.input}
                                 type="date"
                                 value={lv.finishDate}
-                                onChange={(e) => {
-                                  if (!canEditProjectHomeDates) return deny();
-                                  updateLevel(m.id, lv.id, { finishDate: e.target.value });
-                                }}
+                                onChange={(e) => updateLevel(m.id, lv.id, { finishDate: e.target.value })}
                               />
                             </td>
 
@@ -2741,48 +2727,18 @@ function tickMilestone(row, field, checked) {
 
                             <td style={styles.td}>
                               <div style={styles.inline}>
-                                <button
-                                  style={styles.smallBtn}
-                                  onClick={() => {
-                                    if (!canEditProjectHomeStructure) return deny();
-                                    addLevel(m.id);
-                                  }}
-                                >
+                                <button style={styles.smallBtn} onClick={() => addLevel(m.id)}>
                                   + Level
                                 </button>
-                                <button
-                                  style={styles.iconBtn}
-                                  onClick={() => {
-                                    if (!canEditProjectHomeStructure) return deny();
-                                    removeLevel(m.id, lv.id);
-                                  }}
-                                  title="Remove level"
-                                >
+                                <button style={styles.iconBtn} onClick={() => removeLevel(m.id, lv.id)} title="Remove level">
                                   ✕
                                 </button>
                                 {idx === 0 ? (
-                                  <button
-                                    style={styles.iconBtn}
-                                    onClick={() => {
-                                      if (!canEditProjectHomeStructure) return deny();
-                                      removeMasterRow(m.id);
-                                    }}
-                                    title="Remove block/zone"
-                                  >
+                                  <button style={styles.iconBtn} onClick={() => removeMasterRow(m.id)} title="Remove block/zone">
                                     🗑
                                   </button>
                                 ) : null}
                               </div>
-                            </td>
-
-                            <td style={styles.tdCenter}>
-                              <button
-                                style={styles.smallBtn}
-                                onClick={() => openMasterComments(m.id, lv)}
-                                title="Add/view comments"
-                              >
-                                💬 {Array.isArray(lv.comments) && lv.comments.length ? lv.comments.length : ""}
-                              </button>
                             </td>
                           </tr>
                         );
@@ -2800,14 +2756,7 @@ function tickMilestone(row, field, checked) {
                 <h3 style={styles.h3}>Design Responsibilities</h3>
                 <div style={styles.muted}>Each responsibility creates a page in this project.</div>
               </div>
-              <button
-                style={styles.primaryBtn}
-                onClick={() => {
-                  if (!canEditProjectHomeStructure) return deny();
-                  addResponsibility();
-                }}
-                disabled={!activeProject}
-              >
+              <button style={styles.primaryBtn} onClick={addResponsibility} disabled={!activeProject}>
                 + Responsibility
               </button>
             </div>
@@ -2829,10 +2778,7 @@ function tickMilestone(row, field, checked) {
                           style={styles.input}
                           placeholder="e.g. MSA / NCCT / Stone"
                           value={r.name}
-                          onChange={(e) => {
-                            if (!canEditProjectHomeStructure) return deny();
-                            updateResponsibility(r.id, { name: e.target.value });
-                          }}
+                          onChange={(e) => updateResponsibility(r.id, { name: e.target.value })}
                         />
                       </td>
                       <td style={styles.td}>
@@ -2840,21 +2786,11 @@ function tickMilestone(row, field, checked) {
                           style={styles.input}
                           placeholder="e.g. ABC Consultants"
                           value={r.supplier || ""}
-                          onChange={(e) => {
-                            if (!canEditProjectHomeStructure) return deny();
-                            updateResponsibility(r.id, { supplier: e.target.value });
-                          }}
+                          onChange={(e) => updateResponsibility(r.id, { supplier: e.target.value })}
                         />
                       </td>
                       <td style={styles.td}>
-                        <button
-                          style={styles.iconBtn}
-                          onClick={() => {
-                            if (!canEditProjectHomeStructure) return deny();
-                            removeResponsibility(r.id);
-                          }}
-                          title="Remove"
-                        >
+                        <button style={styles.iconBtn} onClick={() => removeResponsibility(r.id)} title="Remove">
                           ✕
                         </button>
                       </td>
@@ -2900,7 +2836,8 @@ function tickMilestone(row, field, checked) {
               <thead>
                 <tr>
                   <th style={styles.thSmall}>Done</th>
-                  <th style={styles.thSmall}>NR</th>                  
+                  <th style={styles.thSmall}>NR</th>
+                  <th style={styles.thSmall}>●</th>
                   <th style={styles.thWide}>Title</th>
                   <th style={styles.thMed}>From</th>
                   <th style={styles.thMed}>Anchor</th>
@@ -2934,10 +2871,7 @@ function tickMilestone(row, field, checked) {
                           <input
                             type="checkbox"
                             checked={!!r.completed}
-                            onChange={(e) => {
-                              if (!canToggleDoneCheckbox) return deny();
-                              updateRow(r.id, { completed: e.target.checked });
-                            }}
+                            onChange={(e) => updateRow(r.id, { completed: e.target.checked })}
                             disabled={r.notRequired || isGuest}
                           />
                         )}
@@ -2949,7 +2883,6 @@ function tickMilestone(row, field, checked) {
                             type="checkbox"
                             checked={!!r.notRequired}
                             onChange={(e) => {
-                              if (!canEditTrackerFields) return deny();
                               const checked = e.target.checked;
                               updateRow(r.id, {
                                 notRequired: checked,
@@ -2961,7 +2894,8 @@ function tickMilestone(row, field, checked) {
                         )}
                       </td>
 
-                      
+                      <td style={styles.tdCenter}>{r.kind === "header" ? null : <TrafficDot status={r._traffic} />}</td>
+
                       <td style={styles.td}>
                         {r.kind === "header" ? (
                           <div style={{ fontWeight: 800 }}>{r.item}</div>
@@ -2969,10 +2903,7 @@ function tickMilestone(row, field, checked) {
                           <input
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.item}
-                            onChange={(e) => {
-                              if (!canEditTrackerFields) return deny();
-                              updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } });
-                            }}
+                            onChange={(e) => updateRow(r.id, { item: e.target.value, meta: { ...r.meta, generated: false } })}
                             disabled={r.notRequired || isGuest}
                           />
                         )}
@@ -2983,10 +2914,7 @@ function tickMilestone(row, field, checked) {
                           <select
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             value={r.anchorKey}
-                            onChange={(e) => {
-                              if (!canEditTrackerFields) return deny();
-                              updateRow(r.id, { anchorKey: e.target.value });
-                            }}
+                            onChange={(e) => updateRow(r.id, { anchorKey: e.target.value })}
                             disabled={r.notRequired || isGuest}
                           >
                             {ANCHORS.map((a) => (
@@ -3004,10 +2932,7 @@ function tickMilestone(row, field, checked) {
                             style={{ ...styles.input, ...(r.notRequired ? styles.inputMuted : null) }}
                             type="date"
                             value={r.anchorDateISO}
-                            onChange={(e) => {
-                              if (!canEditTrackerFields) return deny();
-                              updateRow(r.id, { anchorDateISO: e.target.value });
-                            }}
+                            onChange={(e) => updateRow(r.id, { anchorDateISO: e.target.value })}
                             disabled={r.notRequired || isGuest}
                           />
                         )}
@@ -3058,10 +2983,7 @@ function tickMilestone(row, field, checked) {
                               min={0}
                               value={r.overrideDaysReqToStatusA ?? ""}
                               placeholder={String(globalDaysReqToStatusA)}
-                              onChange={(e) => {
-                                if (!canEditTrackerFields) return deny();
-                                updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) });
-                              }}
+                              onChange={(e) => updateRow(r.id, { overrideDaysReqToStatusA: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
                               disabled={r.notRequired || isGuest}
                               title="Req→A"
                             />
@@ -3071,10 +2993,7 @@ function tickMilestone(row, field, checked) {
                               min={0}
                               value={r.overrideDaysStatusAToFirstIssue ?? ""}
                               placeholder={String(globalDaysStatusAToFirstIssue)}
-                              onChange={(e) => {
-                                if (!canEditTrackerFields) return deny();
-                                updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) });
-                              }}
+                              onChange={(e) => updateRow(r.id, { overrideDaysStatusAToFirstIssue: e.target.value === "" ? null : clampInt(e.target.value, 0) })}
                               disabled={r.notRequired || isGuest}
                               title="A→First"
                             />
@@ -3106,7 +3025,7 @@ function tickMilestone(row, field, checked) {
         </div>
       )}
 
-      {commentTarget ? (
+      {commentRowId ? (
         <div style={styles.modalOverlay} onMouseDown={closeComments}>
           <div style={styles.modalCard} onMouseDown={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
@@ -3117,7 +3036,7 @@ function tickMilestone(row, field, checked) {
             </div>
 
             <div style={{ display: "grid", gap: 10 }}>
-              <div style={styles.muted}>Row: {commentRow?.item || commentRow?._commentLabel || commentRow?.level || "—"}</div>
+              <div style={styles.muted}>Row: {commentRow?.item || "—"}</div>
 
               <label style={styles.label}>
                 Your name
@@ -3182,64 +3101,30 @@ function tickMilestone(row, field, checked) {
 /* ---------- small components ---------- */
 function DatePill({ value, isHeader, overdue, done, muted }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
-
   const empty = !value;
-
-  let dueSoon = false;
-
-  if (!empty && !overdue && !done && !muted) {
-    const today = parseISO(isoToday());
-    const dt = parseISO(value);
-
-    if (today && dt) {
-      const daysLeft = Math.ceil((dt.getTime() - today.getTime()) / dayMs());
-      if (daysLeft >= 0 && daysLeft <= 7) {
-        dueSoon = true;
-      }
-    }
-  }
-
   return (
     <div
       style={{
         ...styles.pillCompact,
         ...(empty ? styles.pillEmpty : null),
-        ...(muted ? styles.pillMuted : null),
         ...(overdue ? styles.pillLate : null),
         ...(done ? styles.pillDone : null),
-        ...(dueSoon ? styles.pillDueSoon : null),
+        ...(muted ? styles.pillMuted : null),
       }}
     >
       {empty ? "—" : value}
     </div>
   );
 }
-
 function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, muted, locked, lockMeta, isAdmin, onUnlock }) {
   if (isHeader) return <div style={{ color: "#9CA3AF" }}>—</div>;
-
   const empty = !value;
-
-  // 🟠 Due soon (< 7 days) — only when meaningful
-  let dueSoon = false;
-  if (!empty && !checked && !overdue && !muted) {
-    const today = parseISO(isoToday());
-    const dt = parseISO(value);
-    if (today && dt) {
-      const daysLeft = Math.ceil((dt.getTime() - today.getTime()) / dayMs());
-      dueSoon = daysLeft >= 0 && daysLeft <= 7;
-    }
-  }
-
   return (
     <div style={styles.milestoneCell}>
       <div
         style={{
           ...styles.pillCompact,
           ...(empty ? styles.pillEmpty : null),
-
-          // order matters: muted/locked override, checked overrides, overdue overrides, dueSoon only if not overdue/checked
-          ...(dueSoon ? styles.pillDueSoon : null),
           ...(overdue ? styles.pillLate : null),
           ...(checked ? styles.pillDone : null),
           ...(muted ? styles.pillMuted : null),
@@ -3248,15 +3133,10 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
       >
         {empty ? "—" : value} {locked ? "🔒" : ""}
       </div>
-
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} disabled={!!disabled} />
         {locked && isAdmin ? (
-          <button
-            style={styles.unlockBtn}
-            onClick={onUnlock}
-            title={lockMeta ? `Locked by ${lockMeta.lockedBy || "—"} on ${lockMeta.lockedAt || ""}` : "Unlock"}
-          >
+          <button style={styles.unlockBtn} onClick={onUnlock} title={lockMeta ? `Locked by ${lockMeta.lockedBy || "—"} on ${lockMeta.lockedAt || ""}` : "Unlock"}>
             Unlock
           </button>
         ) : null}
@@ -3264,7 +3144,6 @@ function MilestoneCell({ isHeader, value, checked, onChange, overdue, disabled, 
     </div>
   );
 }
-
 function StatusBadge({ status }) {
   const map = {
     overdue: { text: "Overdue", style: styles.badgeOverdue },
@@ -3386,7 +3265,6 @@ const styles = {
   pillCompact: { display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, border: "1px solid #E5E7EB", fontSize: 12, background: "#FFFFFF", whiteSpace: "nowrap" },
   pillEmpty: { color: "#9CA3AF", background: "#FAFAFA" },
   pillLate: { border: "1px solid #EF4444" },
-  pillDueSoon: { border: "1px solid #F59E0B" },
   pillDone: { border: "1px solid #10B981" },
   pillMuted: { background: "#F3F4F6", color: "#6B7280" },
   pillLocked: { background: "#F3F4F6", color: "#111827" },
