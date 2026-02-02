@@ -1,29 +1,56 @@
 {
   "routes": [
     {
-  "route": "/login",
-  "redirect": "/.auth/login/aad"
-},
+      "route": "/login",
+      "redirect": "/.auth/login/aad"
+    },
     {
-  "route": "/logout",
-  "redirect": "/.auth/logout"
-},
+      "route": "/logout",
+      "redirect": "/.auth/logout"
+    },
     {
       "route": "/api/state",
-      "allowedRoles": ["anonymous", "authenticated"]
+      "allowedRoles": [
+        "authenticated"
+      ]
     },
     {
       "route": "/api/unlock",
-      "allowedRoles": ["admin"]
+      "allowedRoles": [
+        "admin"
+      ]
     },
     {
       "route": "/api/tick",
-      "allowedRoles": ["authenticated"]
+      "allowedRoles": [
+        "authenticated"
+      ]
     },
     {
       "route": "/api/comment",
-      "allowedRoles": ["authenticated"]
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/api/backupWeekly",
+      "allowedRoles": [
+        "authenticated"
+      ]
+    },
+    {
+      "route": "/*",
+      "allowedRoles": [
+        "authenticated"
+      ]
     }
-  ]
+  ],
+  "navigationFallback": {
+    "rewrite": "/index.html"
+  },
+  "responseOverrides": {
+    "401": {
+      "redirect": "/login"
+    }
+  }
 }
-
