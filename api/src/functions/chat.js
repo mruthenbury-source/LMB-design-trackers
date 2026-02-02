@@ -1,6 +1,9 @@
 function YESNO(b){return b?"YES":"NO";}
 import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
+import { fetch as undiciFetch } from "undici";
+const _fetch = globalThis.fetch ?? undiciFetch;
+
 
 /* ---------------- blob helpers ---------------- */
 
@@ -384,7 +387,7 @@ Prefer accuracy over brevity.
         ...(Array.isArray(messages) ? messages : []),
       ];
 
-      const r = await fetch("https://api.openai.com/v1/responses", {
+      const r = await_fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
