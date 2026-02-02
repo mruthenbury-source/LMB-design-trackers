@@ -1,21 +1,35 @@
-function YESNO(b){return b?"YES":"NO";}
 import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
 
+/**
+ * Deterministic chat endpoint (no LLM).
+ * Reads authoritative state from Azure Blob Storage (container: workback, blob: state.json),
+ * flattens into queryable "tables", parses the user's question using rules, and returns
+ * deterministic answers + optional structured data.
+ *
+ * Env vars:
+ * - BLOB_CONNECTION_STRING (preferred) or AzureWebJobsStorage
+ * - STATE_CONTAINER (optional, default "workback")
+ * - STATE_BLOB (optional, default "state.json")
+ */
+
 /* ---------------- blob helpers ---------------- */
 
-function getBlobClients() {
-  const conn = process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
+function getContainerClient() {
+  const conn =
+    process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
   const containerName = process.env.STATE_CONTAINER || "workback";
-
-  if (!conn) throw new Error("Storage connection string is not set (BLOB_CONNECTION_STRING or AzureWebJobsStorage)");
-
+  if (!conn) {
+    throw new Error(
+      "Missing BLOB_CONNECTION_STRING or AzureWebJobsStorage for blob access."
+    );
+  }
   const service = BlobServiceClient.fromConnectionString(conn);
-  const container = service.getContainerClient(containerName);
-  return { container };
+  return service.getContainerClient(containerName);
 }
 
 async function streamToString(readable) {
+  if (!readable) return "";
   return await new Promise((resolve, reject) => {
     const chunks = [];
     readable.on("data", (d) => chunks.push(d));
@@ -24,287 +38,470 @@ async function streamToString(readable) {
   });
 }
 
-function extractBackupDateFromName(name) {
-  // backups/state-YYYY-MM-DD.json
-  const m = String(name || "").match(/state-(\d{4}-\d{2}-\d{2})\.json$/);
-  return m ? m[1] : null;
+async function loadStateJson() {
+  const container = getContainerClient();
+  const blobName = process.env.STATE_BLOB || "state.json";
+  const blob = container.getBlobClient(blobName);
+
+  const dl = await blob.download();
+  const text = await streamToString(dl.readableStreamBody);
+  return text ? JSON.parse(text) : {};
 }
+
+/* ---------------- deterministic indexing ---------------- */
 
 function safeStr(v) {
   return (v ?? "").toString().trim();
 }
 
-function isoToUtcDate(s) {
+function isoToDate(s) {
   if (!s) return null;
-  const parts = String(s).split("-").map(Number);
+  const parts = String(s).split("-");
   if (parts.length !== 3) return null;
-  const [y, m, d] = parts;
+  const y = Number(parts[0]);
+  const m = Number(parts[1]);
+  const d = Number(parts[2]);
   if (!y || !m || !d) return null;
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  return Number.isNaN(dt.getTime()) ? null : dt;
+  return new Date(Date.UTC(y, m - 1, d));
 }
 
-function diffDaysUTC(aISO, bISO) {
-  const a = isoToUtcDate(aISO);
-  const b = isoToUtcDate(bISO);
-  if (!a || !b) return null;
-  return Math.round((b.getTime() - a.getTime()) / 86400000);
+function addDaysISO(iso, days) {
+  const dt = isoToDate(iso);
+  if (!dt || typeof days !== "number" || Number.isNaN(days)) return "";
+  return new Date(dt.getTime() + days * 86400000).toISOString().slice(0, 10);
 }
 
-const MONTHS = {
-  jan: 1, january: 1,
-  feb: 2, february: 2,
-  mar: 3, march: 3,
-  apr: 4, april: 4,
-  may: 5,
-  jun: 6, june: 6,
-  jul: 7, july: 7,
-  aug: 8, august: 8,
-  sep: 9, sept: 9, september: 9,
-  oct: 10, october: 10,
-  nov: 11, november: 11,
-  dec: 12, december: 12,
-};
-
-function monthKeyFromText(text, defaultYear) {
-  const t = String(text || "").toLowerCase();
-
-  // match month words
-  const monthWord = Object.keys(MONTHS).find((k) => new RegExp(`\\b${k}\\b`).test(t));
-  if (!monthWord) return null;
-
-  // match year (e.g. 2026). If not present, use defaultYear.
-  const yearMatch = t.match(/\b(20\d{2})\b/);
-  const year = yearMatch ? Number(yearMatch[1]) : Number(defaultYear);
-
-  const m = MONTHS[monthWord];
-  const mm = String(m).padStart(2, "0");
-  return `${year}-${mm}`; // e.g. 2026-02
+function subDaysISO(iso, days) {
+  return addDaysISO(iso, -days);
 }
 
-function isProgrammeMonthQuery(text) {
-  const t = String(text || "").toLowerCase();
-  // “on site”, “onsite”, “programme”, “stage” etc.
-  return /\bon\s*site\b|\bonsite\b|\bprogramme\b|\bstage\b|\blevel\b/.test(t);
-}
-
-/* ---------------- index builders ---------------- */
-
-// Builds a minimal “chat-like context” from a saved state.json payload.
 function buildIndexFromState(state) {
   const projects = Array.isArray(state?.projects) ? state.projects : [];
 
-  // programme: master levels start/finish/duration
-  const programme = projects.flatMap((p) =>
-    (p.master || []).flatMap((m) =>
-      (m.levels || []).map((lv) => ({
-        project: safeStr(p.name),
-        blockZone: safeStr(m.blockZone),
-        level: safeStr(lv.name),
-        startDate: safeStr(lv.startDate),
-        finishDate: safeStr(lv.finishDate),
-        durationDays: lv.startDate && lv.finishDate ? diffDaysUTC(lv.startDate, lv.finishDate) : null,
-      }))
-    )
+  const globalReqToStatusA = Number(state?.globalDaysReqToStatusA ?? 0);
+  const globalStatusAToFirstIssue = Number(
+    state?.globalDaysStatusAToFirstIssue ?? 0
   );
 
-  // rows: tracker rows (exclude headers + notRequired like your summaryItems)
+  // Programme schedule rows (master)
+  const programme = [];
+  // Tracker rows (pages)
   const rows = [];
-  projects.forEach((p) => {
-    const responsibilities = Array.isArray(p.responsibilities) ? p.responsibilities : [];
-    const pages = Array.isArray(p.pages) ? p.pages : [];
 
-    const supplierByRespId = new Map(responsibilities.map((r) => [r.id, safeStr(r.supplier)]));
+  for (const p of projects) {
+    const projectName = safeStr(p?.name);
 
-    pages
-      .filter((pg) => !pg?.meta?.isMaster)
-      .forEach((pg) => {
-        (pg.rows || [])
-          .filter((r) => r && r.kind !== "header")
-          .filter((r) => !r.notRequired)
-          .forEach((r) => {
-            // These are “raw” row fields; your UI computes derived dates elsewhere,
-            // so we store what the state likely has + ticks + comments.
-            const comments = Array.isArray(r.comments) ? r.comments : [];
-            const commentsText = comments
-              .map((c) => [safeStr(c?.dateISO), safeStr(c?.name || c?.lockedBy), safeStr(c?.text)].filter(Boolean).join(" — "))
-              .filter(Boolean)
-              .join("\n");
-
-            const supplier = supplierByRespId.get(pg?.meta?.responsibilityId) || "";
-
-            // Create a best-effort key. Ideally you add IDs in chatContext later,
-            // but this works well enough for comparisons.
-            const key = [safeStr(p.name), safeStr(pg.name), safeStr(supplier), safeStr(r.item)].join(" | ");
-
-            rows.push({
-              key,
-              project: safeStr(p.name),
-              responsibility: safeStr(pg.name),
-              supplier: supplier || "—",
-              item: safeStr(r.item),
-
-              // Best effort date fields (if your state stores computed dates, include them)
-              requiredOnSite: safeStr(r.requiredOnSite || r.requiredOnSiteISO),
-              statusA: safeStr(r.statusA || r.statusAISO),
-              firstIssue: safeStr(r.firstIssue || r.firstIssueISO),
-
-              // If you store these in state (many builds do)
-              timeframe: safeStr(r.timeframe),
-              daysReqToStatusA: r.overrideDaysReqToStatusA ?? null,
-              daysStatusAToFirstIssue: r.overrideDaysStatusAToFirstIssue ?? null,
-
-              // ticks
-              ticks: {
-                statusA: !!r.statusADone,
-                firstIssue: !!r.firstIssueDone,
-                completed: !!r.completed,
-                notRequired: !!r.notRequired,
-              },
-
-              comments: commentsText,
-              commentsCount: comments.length,
-            });
-          });
-      });
-  });
-
-  return { programme, rows };
-}
-
-// Diff current vs backup (tick + date changes)
-function diffCurrentVsBackup(currentCtx, backupIndex) {
-  const currentRows = Array.isArray(currentCtx?.rows) ? currentCtx.rows : [];
-  const backupRows = Array.isArray(backupIndex?.rows) ? backupIndex.rows : [];
-
-  const curMap = new Map();
-  currentRows.forEach((r) => {
-    const key =
-      safeStr(r.key) ||
-      [safeStr(r.project), safeStr(r.responsibility), safeStr(r.supplier), safeStr(r.item)].join(" | ");
-    curMap.set(key, r);
-  });
-
-  const changes = [];
-  backupRows.forEach((b) => {
-    const key = safeStr(b.key) || [safeStr(b.project), safeStr(b.responsibility), safeStr(b.supplier), safeStr(b.item)].join(" | ");
-    const c = curMap.get(key);
-    if (!c) return;
-
-    const tickChanges = [];
-    const ct = c.ticks || {};
-    const bt = b.ticks || {};
-
-    ["statusA", "firstIssue", "completed", "notRequired"].forEach((k) => {
-      const cv = !!ct[k];
-      const bv = !!bt[k];
-      if (cv !== bv) tickChanges.push({ tick: k, from: bv, to: cv });
-    });
-
-    const dateChanges = [];
-    ["requiredOnSite", "statusA", "firstIssue", "timeframe"].forEach((k) => {
-      const cv = safeStr(c[k]);
-      const bv = safeStr(b[k]);
-      if (cv !== bv && (cv || bv)) dateChanges.push({ field: k, from: bv || null, to: cv || null });
-    });
-
-    if (tickChanges.length || dateChanges.length) {
-      changes.push({
-        key,
-        project: safeStr(c.project),
-        responsibility: safeStr(c.responsibility),
-        supplier: safeStr(c.supplier),
-        item: safeStr(c.item),
-        tickChanges,
-        dateChanges,
-      });
+    // Programme: project.master[].levels[]
+    const masterBlocks = Array.isArray(p?.master) ? p.master : [];
+    for (const m of masterBlocks) {
+      const blockZone = safeStr(m?.blockZone);
+      const levels = Array.isArray(m?.levels) ? m.levels : [];
+      for (const lv of levels) {
+        programme.push({
+          project: projectName,
+          blockZone,
+          level: safeStr(lv?.name),
+          startDate: safeStr(lv?.startDate),
+          finishDate: safeStr(lv?.finishDate),
+        });
+      }
     }
-  });
 
-  // Keep payload small
-  return {
-    changedCount: changes.length,
-    changedSample: changes.slice(0, 120),
-  };
-}
+    // Tracker: map responsibilityId -> supplier
+    const responsibilities = Array.isArray(p?.responsibilities)
+      ? p.responsibilities
+      : [];
+    const supplierByRespId = new Map(
+      responsibilities.map((r) => [r?.id, safeStr(r?.supplier)])
+    );
 
-/* ---------------- chat function ---------------- */
+    const pages = Array.isArray(p?.pages) ? p.pages : [];
+    for (const pg of pages) {
+      // Skip master pages (programme schedule lives in p.master)
+      if (pg?.meta?.isMaster) continue;
 
-function trimText(s, max = 1200) {
-  if (typeof s !== "string") return s;
-  return s.length > max ? s.slice(0, max) + "…" : s;
-}
+      const responsibility = safeStr(pg?.name);
+      const supplier =
+        supplierByRespId.get(pg?.meta?.responsibilityId) || "—";
 
-function compactMessages(messages) {
-  if (!Array.isArray(messages)) return [];
-  // Drop UI error echoes to avoid poisoning the conversation and wasting tokens
-  const cleaned = messages.filter(
-    (m) => !(m?.role === "assistant" && typeof m?.content === "string" && m.content.startsWith("Chat error:"))
-  );
-  // Keep the most recent turns only (prevents unbounded growth)
-  const last = cleaned.slice(-10);
-  return last.map((m) => ({
-    role: m?.role,
-    content: trimText(String(m?.content ?? ""), 2000),
-  }));
-}
+      const pageRows = Array.isArray(pg?.rows) ? pg.rows : [];
+      for (const r of pageRows) {
+        if (!r || r.kind === "header") continue;
+        if (r.notRequired) continue;
 
-function compactAppContext(ctx) {
-  if (!ctx || typeof ctx !== "object") return {};
-  // Keep stable, small, high-signal fields; compact large collections to stay within model limits.
-  const out = {
-    app: ctx.app,
-    today: ctx.today,
-    view: ctx.view,
-    counts: ctx.counts,
-    activeProject: ctx.activeProject ? { id: ctx.activeProject.id, name: ctx.activeProject.name } : undefined,
-    activePage: ctx.activePage ? { id: ctx.activePage.id, name: ctx.activePage.name, isMaster: ctx.activePage.isMaster } : undefined,
-  };
+        // Required on site date: prefer explicit fields, fallback to anchorDateISO
+        const requiredOnSite = safeStr(
+          r.requiredOnSite || r.requiredOnSiteISO || r.anchorDateISO
+        );
 
-  // Programme data is used for programme questions; keep it, but don't pretty-print later.
-  if (Array.isArray(ctx.programme)) out.programme = ctx.programme;
-  if (ctx.programmeIndex && typeof ctx.programmeIndex === "object") out.programmeIndex = ctx.programmeIndex;
+        const daysReqToStatusA = Number(
+          r.overrideDaysReqToStatusA ?? globalReqToStatusA
+        );
+        const daysStatusAToFirstIssue = Number(
+          r.overrideDaysStatusAToFirstIssue ?? globalStatusAToFirstIssue
+        );
 
-  // Rows are the primary dataset. Keep ALL rows, but strip to the fields your system prompt relies on.
-  if (Array.isArray(ctx.rows)) {
-    out.rows = ctx.rows.map((r) => ({
-      key: r?.key,
-      project: r?.project,
-      responsibility: r?.responsibility,
-      supplier: r?.supplier,
-      item: r?.item,
-      requiredOnSite: r?.requiredOnSite,
-      statusA: r?.statusA,
-      firstIssue: r?.firstIssue,
-      timeframe: r?.timeframe,
-      traffic: r?.traffic,
-      ticks: r?.ticks,
-      // searchText can be huge; keep it but trim per row to avoid context overflow.
-      searchText: trimText(r?.searchText ? String(r.searchText) : "", 500),
-      comments: trimText(r?.comments ? String(r.comments) : "", 800),
-    }));
+        const statusA =
+          safeStr(r.statusA || r.statusAISO) ||
+          (requiredOnSite ? subDaysISO(requiredOnSite, daysReqToStatusA) : "");
+
+        const firstIssue =
+          safeStr(r.firstIssue || r.firstIssueISO) ||
+          (statusA ? subDaysISO(statusA, daysStatusAToFirstIssue) : "");
+
+        rows.push({
+          project: projectName,
+          responsibility,
+          supplier,
+          item: safeStr(r.item),
+          requiredOnSite,
+          statusA,
+          firstIssue,
+          ticks: {
+            statusA: !!r.statusADone,
+            firstIssue: !!r.firstIssueDone,
+            completed: !!r.completed,
+            notRequired: !!r.notRequired,
+          },
+        });
+      }
+    }
   }
 
-  // The UI "sample" block can get very large; keep only a small slice.
-  const overdueTop = ctx?.sample?.overdueTop;
-  if (Array.isArray(overdueTop)) {
-    out.sample = {
-      overdueTop: overdueTop.slice(0, 12).map((x) => ({
-        project: x.project,
-        responsibility: x.responsibility,
-        supplier: x.supplier,
-        item: x.item,
-        requiredOnSite: x.requiredOnSite,
-        statusA: x.statusA,
-        traffic: x.traffic,
-        ticks: x.ticks,
-      })),
+  // Dictionaries for parsing
+  const dict = {
+    projects: [...new Set(rows.map((r) => r.project).filter(Boolean))].sort(),
+    suppliers: [...new Set(rows.map((r) => r.supplier).filter(Boolean))].sort(),
+    responsibilities: [
+      ...new Set(rows.map((r) => r.responsibility).filter(Boolean)),
+    ].sort(),
+  };
+
+  return { programme, rows, dict };
+}
+
+/* ---------------- deterministic parsing + execution ---------------- */
+
+function getLastUserText(messages) {
+  if (!Array.isArray(messages)) return "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return String(messages[i]?.content || "");
+  }
+  return "";
+}
+
+function normalize(s) {
+  return safeStr(s).toLowerCase();
+}
+
+function pickBestMatch(text, candidates) {
+  const t = normalize(text);
+  // exact (case-insensitive) containment match
+  let best = "";
+  let bestLen = 0;
+  for (const c of candidates) {
+    const cn = normalize(c);
+    if (!cn) continue;
+    // whole-word-ish match
+    const re = new RegExp(`\\b${escapeRegExp(cn)}\\b`, "i");
+    if (re.test(t) && cn.length > bestLen) {
+      best = c;
+      bestLen = cn.length;
+    }
+  }
+  return best || "";
+}
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function todayISOFromContext(ctx) {
+  const iso = safeStr(ctx?.today);
+  if (iso && isoToDate(iso)) return iso;
+  // UTC date is fine for deterministic comparisons; UI already sends "today" typically.
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isOverdue(row, todayISO) {
+  if (row?.ticks?.completed || row?.ticks?.notRequired) return false;
+
+  // Prefer statusA if present and not done
+  if (row.statusA && isoToDate(row.statusA) && !row?.ticks?.statusA) {
+    return isoToDate(row.statusA) < isoToDate(todayISO);
+  }
+  // Fallback: requiredOnSite
+  if (row.requiredOnSite && isoToDate(row.requiredOnSite)) {
+    return isoToDate(row.requiredOnSite) < isoToDate(todayISO);
+  }
+  return false;
+}
+
+function monthKeyFromText(text, defaultYear) {
+  const t = normalize(text);
+  const months = {
+    jan: 1,
+    january: 1,
+    feb: 2,
+    february: 2,
+    mar: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    may: 5,
+    jun: 6,
+    june: 6,
+    jul: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dec: 12,
+    december: 12,
+  };
+  let monthNum = null;
+  for (const k of Object.keys(months)) {
+    const re = new RegExp(`\\b${k}\\b`, "i");
+    if (re.test(t)) {
+      monthNum = months[k];
+      break;
+    }
+  }
+  if (!monthNum) return null;
+
+  const yearMatch = t.match(/\b(20\d{2})\b/);
+  const year = yearMatch ? Number(yearMatch[1]) : Number(defaultYear);
+  const mm = String(monthNum).padStart(2, "0");
+  return `${year}-${mm}`;
+}
+
+function startEndOfMonth(monthKey) {
+  const [yS, mS] = String(monthKey).split("-");
+  const y = Number(yS);
+  const m = Number(mS);
+  const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
+  const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  return { start, end };
+}
+
+function overlapsMonth(startDate, finishDate, monthStart, monthEnd) {
+  const s = isoToDate(startDate);
+  const f = isoToDate(finishDate);
+  const ms = isoToDate(monthStart);
+  const me = isoToDate(monthEnd);
+  if (!s || !f || !ms || !me) return false;
+  return s <= me && f >= ms;
+}
+
+function formatListLines(lines) {
+  if (!lines.length) return "";
+  return `• ${lines.join("\n• ")}`;
+}
+
+function handleDeterministic(question, index, uiContext) {
+  const q = safeStr(question);
+  const ql = q.toLowerCase();
+  const todayISO = todayISOFromContext(uiContext);
+
+  // Default project from context if present
+  const defaultProject = safeStr(uiContext?.activeProject?.name);
+  const projectFromText = pickBestMatch(q, index.dict.projects);
+  const project = projectFromText || defaultProject;
+
+  // Supplier filter from text if present
+  const supplierFromText = pickBestMatch(q, index.dict.suppliers);
+  const supplier = supplierFromText;
+
+  // --- Programme month queries ---
+  if (/\b(on\s*site|onsite|programme)\b/i.test(q)) {
+    const mk = monthKeyFromText(q, todayISO.slice(0, 4));
+    if (mk) {
+      const { start, end } = startEndOfMonth(mk);
+      const scoped = project
+        ? index.programme.filter(
+            (p) => normalize(p.project) === normalize(project)
+          )
+        : index.programme;
+
+      const matched = scoped.filter((p) =>
+        overlapsMonth(p.startDate, p.finishDate, start, end)
+      );
+
+      const lines = matched.slice(0, 80).map(
+        (p) =>
+          `${p.project} — ${p.blockZone} — ${p.level} | ${p.startDate} → ${p.finishDate}`
+      );
+
+      return {
+        answer: matched.length
+          ? `On site in ${mk}${project ? ` for ${project}` : ""}:\n${formatListLines(lines)}`
+          : `No programme items found on site in ${mk}${project ? ` for ${project}` : ""}.`,
+        data: {
+          intent: "programme_month",
+          monthKey: mk,
+          project: project || null,
+          count: matched.length,
+          rows: matched.slice(0, 80),
+        },
+      };
+    }
+  }
+
+  // Prepare tracker scope
+  let tracker = index.rows;
+
+  if (project) {
+    tracker = tracker.filter((r) => normalize(r.project) === normalize(project));
+  }
+  if (supplier) {
+    tracker = tracker.filter(
+      (r) => normalize(r.supplier) === normalize(supplier)
+    );
+  }
+
+  // --- Supplier has most overdue ---
+  if (
+    ql.includes("supplier") &&
+    (ql.includes("most") || ql.includes("top")) &&
+    ql.includes("overdue")
+  ) {
+    const overdue = tracker.filter((r) => isOverdue(r, todayISO));
+    const counts = new Map();
+    for (const r of overdue) {
+      counts.set(r.supplier, (counts.get(r.supplier) || 0) + 1);
+    }
+    const ranked = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20);
+
+    if (!ranked.length) {
+      return {
+        answer: `No overdue items found${project ? ` in ${project}` : ""}.`,
+        data: { intent: "group_count_supplier_overdue", project: project || null },
+      };
+    }
+
+    const [topSupplier, topCount] = ranked[0];
+    const lines = ranked.map(([s, c]) => `${s}: ${c}`);
+    return {
+      answer:
+        `Supplier with the most overdue items${project ? ` in ${project}` : ""}: ${topSupplier} (${topCount}).\n` +
+        `Top suppliers:\n${formatListLines(lines)}`,
+      data: {
+        intent: "group_count_supplier_overdue",
+        project: project || null,
+        ranked: ranked.map(([s, c]) => ({ supplier: s, count: c })),
+      },
     };
   }
 
-  return out;
+  // --- Overdue next ---
+  if (
+    ql.includes("overdue") &&
+    (ql.includes("next") || ql.includes("soonest") || ql.includes("upcoming"))
+  ) {
+    const overdue = tracker.filter((r) => isOverdue(r, todayISO));
+    overdue.sort((a, b) =>
+      safeStr(a.requiredOnSite).localeCompare(safeStr(b.requiredOnSite))
+    );
+
+    const out = overdue.slice(0, 25).map(
+      (r) =>
+        `${r.project} — ${r.supplier} — ${r.item} | required on site: ${r.requiredOnSite} | status A: ${r.statusA}`
+    );
+
+    return {
+      answer: out.length
+        ? `Overdue next${project ? ` in ${project}` : ""}:\n${formatListLines(out)}`
+        : `No overdue items found${project ? ` in ${project}` : ""}.`,
+      data: {
+        intent: "next_overdue",
+        project: project || null,
+        supplier: supplier || null,
+        totalOverdue: overdue.length,
+        rows: overdue.slice(0, 25),
+      },
+    };
+  }
+
+  // --- Next Status A dates ---
+  if (
+    (ql.includes("status a") || ql.includes("statusa")) &&
+    (ql.includes("next") || ql.includes("upcoming"))
+  ) {
+    const pending = tracker.filter((r) => r.statusA && !r?.ticks?.statusA);
+    pending.sort((a, b) => safeStr(a.statusA).localeCompare(safeStr(b.statusA)));
+
+    const out = pending.slice(0, 25).map(
+      (r) => `${r.statusA} — ${r.supplier} — ${r.item}`
+    );
+
+    return {
+      answer: out.length
+        ? `Next Status A dates${project ? ` in ${project}` : ""}:\n${formatListLines(out)}`
+        : `No upcoming Status A dates found${project ? ` in ${project}` : ""}.`,
+      data: {
+        intent: "next_statusA",
+        project: project || null,
+        supplier: supplier || null,
+        count: pending.length,
+        rows: pending.slice(0, 25),
+      },
+    };
+  }
+
+  // --- Count overdue (explicit or implied) ---
+  if (ql.includes("how many") || ql.includes("count")) {
+    const wantOverdue = ql.includes("overdue");
+    if (wantOverdue) {
+      const overdue = tracker.filter((r) => isOverdue(r, todayISO));
+      return {
+        answer: `Overdue count${project ? ` in ${project}` : ""}${
+          supplier ? ` for ${supplier}` : ""
+        }: ${overdue.length}.`,
+        data: {
+          intent: "count_overdue",
+          project: project || null,
+          supplier: supplier || null,
+          count: overdue.length,
+        },
+      };
+    }
+    // total count
+    return {
+      answer: `Row count${project ? ` in ${project}` : ""}${
+        supplier ? ` for ${supplier}` : ""
+      }: ${tracker.length}.`,
+      data: {
+        intent: "count_rows",
+        project: project || null,
+        supplier: supplier || null,
+        count: tracker.length,
+      },
+    };
+  }
+
+  // Deterministic help fallback
+  return {
+    answer:
+      `I can answer programme + tracker questions deterministically.\n` +
+      `Try:\n` +
+      `• What is overdue next?\n` +
+      `• Which supplier has the most overdue items?\n` +
+      `• What are the next Status A dates?\n` +
+      `• How many overdue items are there?\n` +
+      `• What is on site in February 2026?`,
+    data: { intent: "help" },
+  };
 }
 
+/* ---------------- Azure Function ---------------- */
 
 app.http("chat", {
   methods: ["POST"],
@@ -312,197 +509,20 @@ app.http("chat", {
   handler: async (req) => {
     try {
       const body = await req.json().catch(() => ({}));
-      const messages = compactMessages(body?.messages);
-      const appContextRaw = body?.context;
-      const appContext = compactAppContext(appContextRaw);
-      const searchBackups = !!body?.searchBackups;
+      const question = getLastUserText(body?.messages);
 
-      const apiKey = process.env.OPENAI_API_KEY;
-      const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+      // Always read from blob (authoritative source) to avoid relying on huge UI context.
+      const state = await loadStateJson();
+      const index = buildIndexFromState(state);
 
-      if (!apiKey) {
-        return {
-          status: 500,
-          jsonBody: {
-            error:
-              "OPENAI_API_KEY is not set. Add it in Azure Static Web Apps > Configuration > Application settings.",
-          },
-        };
-      }
-
-      // Optional: load + index backups (only when user ticks "search backups")
-      const backupsPayload = { enabled: searchBackups, count: 0, snapshots: [], comparisons: [] };
-
-      if (searchBackups) {
-        const prefix = process.env.BACKUP_PREFIX || "backups/";
-        const maxBackups = Number(process.env.BACKUP_CHAT_LIMIT || 6);
-
-        const { container } = getBlobClients();
-        await container.createIfNotExists();
-
-        const found = [];
-        for await (const blob of container.listBlobsFlat({ prefix })) {
-          const date = extractBackupDateFromName(blob.name);
-          if (!date) continue;
-          found.push({ name: blob.name, date });
-        }
-
-        found.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-
-        const selected = found.slice(0, Math.max(0, maxBackups));
-        const snapshots = [];
-
-        for (const b of selected) {
-          try {
-            const client = container.getBlobClient(b.name);
-            const dl = await client.download();
-            const text = await streamToString(dl.readableStreamBody);
-            const state = text ? JSON.parse(text) : null;
-
-            const index = buildIndexFromState(state || {});
-            snapshots.push({
-              date: b.date,
-              blobName: b.name,
-              programme: index.programme,
-              rows: index.rows,
-            });
-          } catch {
-            // ignore bad blobs
-          }
-        }
-
-        backupsPayload.count = snapshots.length;
-        backupsPayload.snapshots = snapshots.map((s) => ({
-          date: s.date,
-          blobName: s.blobName,
-          // keep the data, but you can trim if needed
-          programme: s.programme,
-          rows: s.rows,
-        }));
-
-        // Precompute diffs current vs each backup (helps model answer comparisons fast)
-        backupsPayload.comparisons = snapshots.map((s) => ({
-          date: s.date,
-          blobName: s.blobName,
-          diff: diffCurrentVsBackup(appContext || {}, s),
-        }));
-      }
-
-      const systemText = `
-You are an expert assistant for the SupplySync programme tracker.
-
-STRICT RULES:
-- Always search ALL rows in APP_CONTEXT_JSON.rows unless the user explicitly limits scope.
-- Treat rows[].searchText as the primary full-text index.
-- Do NOT answer from sample data if rows[] exists.
-- Tick boxes are authoritative in rows[].ticks (YES/NO).
-- Dates may appear as requiredOnSite, statusA, firstIssue, timeframe, or duration fields.
-- When asked "is X ticked", respond YES or NO and name the item.
-- When asked to list items, return ALL matching rows or ask the user to narrow scope.
-- Never guess. If data is missing, say so clearly.
-
-PROGRAMME RULES (master schedule):
-- Programme questions must use APP_CONTEXT_JSON.programme and APP_CONTEXT_JSON.programmeIndex (not rows).
-- “Start” means programme[].startDate. “Finish” means programme[].finishDate.
-- “On site” means ANY overlap between startDate and finishDate (inclusive).
-- For “on site in <month>” questions:
-  - ALWAYS use APP_CONTEXT_JSON.programmeIndex[YYYY-MM]
-  - programmeIndex is COMPLETE and AUTHORITATIVE
-  - Do NOT infer from programme[] when programmeIndex exists
-  - If stages are requested, use programmeIndex[YYYY-MM].stages.
-  - If PROGRAMME_INDEX_MATCH is present, it is complete and authoritative: use it first and do not omit items.
-
-BACKUPS:
-- If BACKUPS_JSON is present, you may compare snapshots.
-- Always state the backup date(s) explicitly (YYYY-MM-DD).
-- When comparing, show BEFORE → AFTER values and list only changed items unless asked for full dumps.
-
-Prefer accuracy over brevity.
-`;
-
-
-      
-      // Deterministic programme month slice for “on site in <month>” questions (prevents omissions)
-      const userText =
-        Array.isArray(messages) && messages.length
-          ? String(messages[messages.length - 1]?.content || "")
-          : "";
-
-      const todayISO = safeStr(appContext?.today) || new Date().toISOString().slice(0, 10);
-      const fallbackYear = todayISO.slice(0, 4);
-
-      let programmeIndexMatch = null;
-      if (isProgrammeMonthQuery(userText)) {
-        const mk = monthKeyFromText(userText, fallbackYear);
-        const idx = appContext?.programmeIndex || null;
-
-        if (mk && idx && idx[mk]) {
-          programmeIndexMatch = {
-            monthKey: mk,
-            projects: idx[mk]?.projects || [],
-            stages: idx[mk]?.stages || [],
-            projectCount: Array.isArray(idx[mk]?.projects) ? idx[mk].projects.length : 0,
-            stageCount: Array.isArray(idx[mk]?.stages) ? idx[mk].stages.length : 0,
-            instruction:
-              "Use PROGRAMME_INDEX_MATCH as complete authoritative data for 'on site in this month' questions. Do not omit any projects/stages.",
-          };
-        }
-      }
-
-      const input = [
-        { role: "system", content: systemText },
-        { role: "system", content: `APP_CONTEXT_JSON:\n${JSON.stringify(appContext ?? {})}` },
-        ...(programmeIndexMatch
-          ? [{ role: "system", content: `PROGRAMME_INDEX_MATCH:\n${JSON.stringify(programmeIndexMatch)}` }]
-          : []),
-        ...(searchBackups
-          ? [{ role: "system", content: `BACKUPS_JSON:\n${JSON.stringify(backupsPayload ?? {})}` }]
-          : []),
-        ...(Array.isArray(messages) ? messages : []),
-      ];
-
-      const r = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          input,
-          temperature: 0.2,
-          max_output_tokens: 900,
-        }),
-      });
-
-      const data = await r.json().catch(() => ({}));
-
-      if (!r.ok) {
-        return {
-          status: 500,
-          jsonBody: {
-            error: "OpenAI request failed",
-            status: r.status,
-            details: data,
-          },
-        };
-      }
-
-      const answer =
-        data?.output_text ||
-        data?.output?.[0]?.content?.[0]?.text ||
-        "No response text returned.";
-
-      return {
-        status: 200,
-        jsonBody: { answer },
-      };
+      const result = handleDeterministic(question, index, body?.context || {});
+      // Keep UI compatibility: return { answer }. Include deterministic data for debugging/future UI.
+      return { status: 200, jsonBody: { answer: result.answer, data: result.data } };
     } catch (e) {
       return {
         status: 500,
-        jsonBody: { error: "chat handler error", details: String(e) },
+        jsonBody: { error: "deterministic chat error", details: String(e?.message || e) },
       };
     }
   },
 });
-
