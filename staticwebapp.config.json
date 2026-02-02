@@ -39,7 +39,7 @@
       ]
     },
     {
-      "route": "/*",
+      "route": "/api/chat",
       "allowedRoles": [
         "authenticated"
       ]
