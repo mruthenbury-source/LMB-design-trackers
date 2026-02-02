@@ -33,7 +33,7 @@
       ]
     },
     {
-      "route": "/api/backupWeekly",
+      "route": "/api/backupWeeklyHttp",
       "allowedRoles": [
         "authenticated"
       ]
