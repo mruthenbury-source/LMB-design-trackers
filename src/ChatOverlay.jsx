@@ -49,31 +49,26 @@ export default function ChatOverlay(props) {
   const programmeData = props.programmeData;
 
 const projectOptions = useMemo(() => {
-  // Prefer options from props.projects or chatContext.state.projects or chatContext.projects
+  // Prefer options from props.projects or chatContext.state.projects or chatContext.projects,
+  // and fall back to /api/meta results.
   const fromProps = Array.isArray(props.projects) ? props.projects : [];
   const ctx = chatContext || {};
   const fromState = Array.isArray(ctx?.state?.projects) ? ctx.state.projects : [];
   const fromCtxProjects = Array.isArray(ctx?.projects) ? ctx.projects : [];
+  const fromMeta = Array.isArray(metaProjects) ? metaProjects : [];
 
   const names = []
     .concat(fromProps)
     .concat(fromState)
     .concat(fromCtxProjects)
+    .concat(fromMeta)
     .map((p) => (typeof p === "string" ? p : p?.name))
     .filter(Boolean)
     .map((s) => String(s).trim())
     .filter(Boolean);
 
-      .concat(Array.isArray(metaProjects) ? metaProjects : [])
-    .filter(Boolean)
-    .map((s) => String(s).trim())
-    .filter(Boolean);
-
   return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-}, [props.projects, chatContext, metaProjects]);
-
-
-  const sendChat =
+}, [props.projects, chatContext, metaProjects]);const sendChat =
     props.sendChat ??
     (async (text) => {
       if (typeof props.onSend === "function") {
