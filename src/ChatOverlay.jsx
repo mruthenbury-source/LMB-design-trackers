@@ -48,6 +48,26 @@ export default function ChatOverlay(props) {
   const chatContext = props.chatContext;
   const programmeData = props.programmeData;
 
+const projectOptions = useMemo(() => {
+  // Prefer options from props.projects or chatContext.state.projects or chatContext.projects
+  const fromProps = Array.isArray(props.projects) ? props.projects : [];
+  const ctx = chatContext || {};
+  const fromState = Array.isArray(ctx?.state?.projects) ? ctx.state.projects : [];
+  const fromCtxProjects = Array.isArray(ctx?.projects) ? ctx.projects : [];
+
+  const names = []
+    .concat(fromProps)
+    .concat(fromState)
+    .concat(fromCtxProjects)
+    .map((p) => (typeof p === "string" ? p : p?.name))
+    .filter(Boolean)
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+}, [props.projects, chatContext]);
+
+
   const sendChat =
     props.sendChat ??
     (async (text) => {
@@ -58,10 +78,8 @@ export default function ChatOverlay(props) {
 
   // --- Quick question UI ---
   const [quickId, setQuickId] = useState("");
-  const [quickProject, setQuickProject] = useState("");
-  const [quickOnSite, setQuickOnSite] = useState("");
-
-  const listRef = useRef(null);
+  const [quickParams, setQuickParams] = useState({ project: "", dateFrom: "", dateTo: "", asOfDate: "" });
+const listRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
@@ -84,98 +102,64 @@ export default function ChatOverlay(props) {
   }, [chatContext, programmeData]);
 
   const quickTemplates = useMemo(
-    () => [
-      {
-        id: "statusA_all",
-        label: "Status A overdue — all projects",
-        needsProject: false,
-        needsOnSite: false,
-        build: () =>
-          [
-            "Using ONLY the current tracker context, list all projects with Status A overdue.",
-            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
-            "If a field is missing, state it—do not guess.",
-          ].join("\n"),
-      },
-      {
-        id: "statusA_project",
-        label: "Status A overdue — specific project",
-        needsProject: true,
-        needsOnSite: false,
-        build: (p) =>
-          [
-            `Using ONLY the current tracker context, list all Status A overdue items for project: "${p}".`,
-            "Return: Level/Block, item/row reference, due date, days overdue.",
-            "If the project name doesn't match exactly, show the closest matches and ask which to use.",
-          ].join("\n"),
-      },
-      {
-        id: "firstIssue_all",
-        label: "First Issue overdue — all projects",
-        needsProject: false,
-        needsOnSite: false,
-        build: () =>
-          [
-            "Using ONLY the current tracker context, list all projects with First Issue overdue.",
-            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
-            "If a field is missing, state it—do not guess.",
-          ].join("\n"),
-      },
-      {
-        id: "firstIssue_project",
-        label: "First Issue overdue — specific project",
-        needsProject: true,
-        needsOnSite: false,
-        build: (p) =>
-          [
-            `Using ONLY the current tracker context, list all First Issue overdue items for project: "${p}".`,
-            "Return: Level/Block, item/row reference, due date, days overdue.",
-            "If the project name doesn't match exactly, show the closest matches and ask which to use.",
-          ].join("\n"),
-      },
-      {
-        id: "onsite_all",
-        label: "All levels on site in… — all projects (programme)",
-        needsProject: false,
-        needsOnSite: true,
-        build: (_p, d) =>
-          [
-            programmeHint,
-            `Using ONLY the PROGRAMME context, list ALL levels across ALL projects that are on site in: "${d}".`,
-            "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
-            "Return: Project name, Level/Block, on-site date (or range), and which programme field(s) you used.",
-            "Do NOT use tracker rows for this question.",
-          ].join("\n"),
-      },
-      {
-        id: "onsite_project",
-        label: "All levels on site in… — specific project (programme)",
-        needsProject: true,
-        needsOnSite: true,
-        build: (p, d) =>
-          [
-            programmeHint,
-            `Using ONLY the PROGRAMME context, list ALL levels for project: "${p}" that are on site in: "${d}".`,
-            "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
-            "Return: Level/Block, on-site date (or range), and which programme field(s) you used.",
-            "Do NOT use tracker rows for this question.",
-          ].join("\n"),
-      },
-    ],
-    [programmeHint]
-  );
+  () => [
+    { id: "overdue_first_issue_all", label: "Overdue items for first issue (all projects)", params: [] },
+    { id: "overdue_first_issue_project", label: "Overdue items for first issue (specific project)", params: [{ key: "project", type: "project" }] },
 
-  const selectedQuick = useMemo(
-    () => quickTemplates.find((q) => q.id === quickId) || null,
-    [quickId, quickTemplates]
-  );
+    { id: "overdue_statusA_all", label: "Overdue items for Status A approval (all projects)", params: [] },
+    { id: "overdue_statusA_project", label: "Overdue items for Status A approval (specific project)", params: [{ key: "project", type: "project" }] },
+
+    { id: "statusA_approved_all", label: "Which items have Status A approval (all projects)", params: [] },
+    { id: "statusA_approved_project", label: "Which items have Status A approval (specific project)", params: [{ key: "project", type: "project" }] },
+
+    { id: "done_all", label: "Which items are marked as done (all projects)", params: [] },
+    { id: "done_project", label: "Which items are marked as done (specific project)", params: [{ key: "project", type: "project" }] },
+
+    {
+      id: "programme_range_all",
+      label: "Construction programme on site during date range (all projects)",
+      params: [{ key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }],
+    },
+    {
+      id: "programme_range_project",
+      label: "Construction programme on site during date range (specific project)",
+      params: [{ key: "project", type: "project" }, { key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }],
+    },
+
+    { id: "compare_programme_all", label: "Compare programme: as-of date vs current (all projects, uses backups)", params: [{ key: "asOfDate", type: "date" }] },
+    {
+      id: "compare_programme_project",
+      label: "Compare programme: as-of date vs current (specific project, uses backups)",
+      params: [{ key: "project", type: "project" }, { key: "asOfDate", type: "date" }],
+    },
+
+    { id: "comments_all", label: "Return all comments (all projects)", params: [] },
+    { id: "comments_project", label: "Return comments (specific project)", params: [{ key: "project", type: "project" }] },
+  ],
+  []
+);
+
+    const selectedQuick = useMemo(() => quickTemplates.find((q) => q.id === quickId) || null, [quickTemplates, quickId]);
 
   function buildQuickPrompt() {
-    if (!selectedQuick) return "";
-    if (selectedQuick.needsProject && !quickProject.trim()) return "";
-    if (selectedQuick.needsOnSite && !quickOnSite.trim()) return "";
-    return selectedQuick.build(quickProject.trim(), quickOnSite.trim());
+  const q = quickTemplates.find((x) => x.id === quickId);
+  if (!q) return "";
+
+  const params = {};
+  for (const p of q.params || []) {
+    if (p.type === "project") params.project = (quickParams.project || "").trim();
+    if (p.type === "date") params[p.key] = (quickParams[p.key] || "").trim();
   }
+
+  for (const p of q.params || []) {
+    if (p.type === "project" && !params.project) return "";
+    if (p.type === "date" && !params[p.key]) return "";
+  }
+
+  // Deterministic marker parsed by the backend:
+  // TEMPLATE:<id>\nPARAMS:<json>
+  return `TEMPLATE:${q.id}\nPARAMS:${JSON.stringify(params)}`;
+}
 
   function insertQuick() {
     const p = buildQuickPrompt();
@@ -269,7 +253,7 @@ export default function ChatOverlay(props) {
           {/* Quick questions */}
           <div style={styles.quickWrap}>
             <div style={styles.quickRow}>
-              <select value={quickId} onChange={(e) => setQuickId(e.target.value)} style={styles.select}>
+              <select value={quickId} onChange={(e) => { setQuickId(e.target.value); setQuickParams({ project: "", dateFrom: "", dateTo: "", asOfDate: "" }); }} style={styles.select}>
                 <option value="">Quick questions…</option>
                 {quickTemplates.map((q) => (
                   <option key={q.id} value={q.id}>
@@ -297,53 +281,54 @@ export default function ChatOverlay(props) {
               </button>
             </div>
 
-            {(selectedQuick?.needsProject || selectedQuick?.needsOnSite) && (
-              <div style={styles.quickRow}>
-                {selectedQuick?.needsProject && (
-                  <input
-                    value={quickProject}
-                    onChange={(e) => setQuickProject(e.target.value)}
-                    placeholder="Project name…"
-                    style={styles.input}
-                  />
-                )}
-                {selectedQuick?.needsOnSite && (
-                  <input
-                    value={quickOnSite}
-                    onChange={(e) => setQuickOnSite(e.target.value)}
-                    placeholder="Month / date / range…"
-                    style={styles.input}
-                  />
-                )}
-              </div>
-            )}
-          </div>
+            {(selectedQuick?.params?.length > 0) && (
+  <div style={styles.quickRow}>
+    {selectedQuick.params.some((p) => p.type === "project") && (
+      <select
+        value={quickParams.project}
+        onChange={(e) => setQuickParams((s) => ({ ...s, project: e.target.value }))}
+        style={styles.select}
+      >
+        <option value="">{projectOptions.length ? "Select project…" : "No projects loaded"}</option>
+        {projectOptions.map((p) => (
+          <option key={p} value={p}>
+            {p}
+          </option>
+        ))}
+      </select>
+    )}
 
-{/* FREE QUERY BOX (always visible, below quick questions) */}
-<div style={styles.queryBlock}>
-  <div style={styles.queryBoxLabel}>Ask anything:</div>
+    {selectedQuick.params.some((p) => p.key === "dateFrom") && (
+      <input
+        type="date"
+        value={quickParams.dateFrom}
+        onChange={(e) => setQuickParams((s) => ({ ...s, dateFrom: e.target.value }))}
+        style={styles.input}
+        title="From"
+      />
+    )}
 
-  <textarea
-    value={input}
-    onChange={(e) => setInput(e.target.value)}
-    placeholder="Type a message…"
-    style={styles.textarea}
-    rows={2}
-    disabled={false}
-    onKeyDown={(e) => {
-      // Enter to send, Shift+Enter newline
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    }}
-  />
+    {selectedQuick.params.some((p) => p.key === "dateTo") && (
+      <input
+        type="date"
+        value={quickParams.dateTo}
+        onChange={(e) => setQuickParams((s) => ({ ...s, dateTo: e.target.value }))}
+        style={styles.input}
+        title="To"
+      />
+    )}
 
-  <div style={styles.sendRow}>
-    <button
-      onClick={() => handleSend()}
-      disabled={busy || !String(input).trim()}
-      style={{ ...styles.sendBtn, ...(busy || !String(input).trim() ? styles.btnDisabled : null) }}
+    {selectedQuick.params.some((p) => p.key === "asOfDate") && (
+      <input
+        type="date"
+        value={quickParams.asOfDate}
+        onChange={(e) => setQuickParams((s) => ({ ...s, asOfDate: e.target.value }))}
+        style={styles.input}
+        title="As-of date"
+      />
+    )}
+  </div>
+)}
     >
       Send
     </button>
