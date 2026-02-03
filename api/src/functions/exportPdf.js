@@ -1,168 +1,161 @@
 import { app } from "@azure/functions";
 import PDFDocument from "pdfkit";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-function safeStr(v) {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function safe(v) {
   if (v === null || v === undefined) return "";
-  return typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  return typeof v === "string" ? v : JSON.stringify(v);
 }
 
-function wrapTextToWidth(doc, text, maxWidth) {
-  // Simple deterministic wrapper using pdfkit widthOfString
-  const out = [];
-  const paragraphs = safeStr(text).split("\n");
-
-  for (const paragraph of paragraphs) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    if (words.length === 0) {
-      out.push(""); // blank line
-      continue;
-    }
-
-    let line = "";
-    for (const w of words) {
-      const candidate = line ? `${line} ${w}` : w;
-      const width = doc.widthOfString(candidate);
-
-      if (width <= maxWidth) {
-        line = candidate;
-      } else {
-        if (line) out.push(line);
-        // Handle very long single words (no spaces)
-        if (doc.widthOfString(w) > maxWidth) {
-          let chunk = "";
-          for (const ch of w) {
-            const cand2 = chunk + ch;
-            if (doc.widthOfString(cand2) <= maxWidth) chunk = cand2;
-            else {
-              if (chunk) out.push(chunk);
-              chunk = ch;
-            }
-          }
-          line = chunk;
-        } else {
-          line = w;
-        }
-      }
-    }
-    if (line) out.push(line);
-    out.push(""); // paragraph spacing
+function loadLogo() {
+  try {
+    return fs.readFileSync(
+      path.join(__dirname, "..", "assets", "logo.png")
+    );
+  } catch {
+    return null;
   }
+}
 
-  return out;
+function headerFooter(doc, title, logo, pageNo) {
+  const L = doc.page.margins.left;
+  const R = doc.page.width - doc.page.margins.right;
+  const T = doc.page.margins.top;
+  const B = doc.page.height - doc.page.margins.bottom;
+
+  // Header line
+  doc.moveTo(L, T - 10).lineTo(R, T - 10).stroke();
+
+  if (logo) doc.image(logo, L, T - 36, { width: 80 });
+
+  doc.font("Helvetica-Bold")
+    .fontSize(14)
+    .text(title, L + (logo ? 95 : 0), T - 34);
+
+  // Footer
+  doc.moveTo(L, B + 10).lineTo(R, B + 10).stroke();
+
+  doc.fontSize(9).fillColor("gray");
+  doc.text(`Generated ${new Date().toLocaleString()}`, L, B + 16);
+  doc.text(`Page ${pageNo}`, L, B + 16, { width: R - L, align: "right" });
+  doc.fillColor("black");
 }
 
 app.http("exportPdf", {
   methods: ["POST"],
   authLevel: "anonymous",
+
   handler: async (req) => {
     try {
       const body = await req.json().catch(() => ({}));
-      const title = safeStr(body.title || "Chat Export");
-      const answer = safeStr(body.answer || "");
+      const title = safe(body.title || "Chat Export");
+      const answer = safe(body.answer || "");
       const rows = Array.isArray(body.rows) ? body.rows : [];
-      const meta = body.meta || {};
 
-      const doc = new PDFDocument({ size: "A4", margin: 36 });
-      const chunks = [];
-      doc.on("data", (c) => chunks.push(c));
-      const done = new Promise((resolve) => doc.on("end", resolve));
+      const doc = new PDFDocument({ margin: 40 });
+      const buffers = [];
+      doc.on("data", (d) => buffers.push(d));
+      const done = new Promise((r) => doc.on("end", r));
 
-      // Header
-      doc.fontSize(16).font("Helvetica-Bold").text(title, { underline: true });
-      doc.moveDown(0.3);
-      doc.fontSize(9).font("Helvetica").fillColor("gray").text(`Generated: ${new Date().toISOString()}`);
-      doc.fillColor("black");
-      doc.moveDown(1);
+      const logo = loadLogo();
+      let pageNo = 1;
 
-      // Meta
-      const metaKeys = Object.keys(meta || {});
-      if (metaKeys.length) {
-        doc.fontSize(11).font("Helvetica-Bold").text("Parameters", { underline: true });
-        doc.moveDown(0.2);
-        doc.fontSize(10).font("Helvetica");
-        for (const k of metaKeys) {
-          doc.text(`${k}: ${safeStr(meta[k])}`);
-        }
-        doc.moveDown(0.8);
-      }
+      headerFooter(doc, title, logo, pageNo);
+      doc.on("pageAdded", () => {
+        pageNo++;
+        headerFooter(doc, title, logo, pageNo);
+      });
 
-      // Answer
-      doc.fontSize(11).font("Helvetica-Bold").text("Answer", { underline: true });
-      doc.moveDown(0.2);
-      doc.fontSize(10).font("Helvetica");
+      // ===== ANSWER TEXT =====
+      doc.moveDown(2);
+      doc.fontSize(12).font("Helvetica-Bold").text("Answer");
+      doc.moveDown(0.5);
+      doc.fontSize(10).font("Helvetica").text(answer, { width: 500 });
 
-      const maxWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-      const lines = wrapTextToWidth(doc, answer, maxWidth);
-
-      for (const ln of lines) {
-        if (doc.y > doc.page.height - doc.page.margins.bottom - 40) doc.addPage();
-        doc.text(ln);
-      }
-
-      // Rows table (optional)
+      // ===== TABLE =====
       if (rows.length) {
         doc.addPage();
-        doc.fontSize(11).font("Helvetica-Bold").text("Data", { underline: true });
-        doc.moveDown(0.5);
-        doc.fontSize(8).font("Helvetica");
+
+        const pageW =
+          doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
         const cols = [
-          { key: "project", label: "Project", w: 70 },
-          { key: "supplier", label: "Supplier", w: 55 },
+          { key: "project", label: "Project", w: 80 },
+          { key: "supplier", label: "Supplier", w: 70 },
           { key: "responsibility", label: "Resp", w: 70 },
-          { key: "item", label: "Item", w: 170 },
+          {
+            key: "item",
+            label: "Item",
+            w: pageW - (80 + 70 + 70 + 55 + 55),
+          },
           { key: "requiredOnSite", label: "Req", w: 55 },
           { key: "statusA", label: "A", w: 55 },
         ];
 
         const startX = doc.page.margins.left;
-        let y = doc.y;
+        let y = doc.y + 10;
+        const rowH = 14;
+        const totalW = cols.reduce((a, c) => a + c.w, 0);
 
-        const rowWidth = cols.reduce((a, c) => a + c.w, 0);
-
-        const drawRow = (vals, isHeader = false) => {
+        const drawRow = (vals, header = false) => {
           let x = startX;
-          doc.font(isHeader ? "Helvetica-Bold" : "Helvetica");
-          for (let i = 0; i < vals.length; i++) {
-            doc.text(safeStr(vals[i]), x, y, { width: cols[i].w, ellipsis: true });
-            x += cols[i].w;
-          }
-          y += 12;
+          doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(8);
 
-          if (y > doc.page.height - doc.page.margins.bottom - 20) {
+          vals.forEach((v, i) => {
+            doc.text(safe(v), x, y, {
+              width: cols[i].w,
+              ellipsis: true,
+            });
+            x += cols[i].w;
+          });
+
+          // Row line
+          doc
+            .moveTo(startX, y + rowH - 2)
+            .lineTo(startX + totalW, y + rowH - 2)
+            .strokeOpacity(0.2)
+            .stroke()
+            .strokeOpacity(1);
+
+          y += rowH;
+
+          if (y > doc.page.height - doc.page.margins.bottom - 40) {
             doc.addPage();
-            y = doc.page.margins.top;
+            y = doc.page.margins.top + 20;
           }
         };
 
+        // Header row
         drawRow(cols.map((c) => c.label), true);
-        doc.moveTo(startX, y).lineTo(startX + rowWidth, y).stroke();
-        y += 6;
 
-        const MAX = 1000;
-        rows.slice(0, MAX).forEach((r) => drawRow(cols.map((c) => r?.[c.key] ?? "")));
-
-        if (rows.length > MAX) {
-          doc.font("Helvetica").text(`Showing first ${MAX} of ${rows.length} rows.`, startX, y);
-        }
+        rows.slice(0, 1000).forEach((r) =>
+          drawRow(cols.map((c) => r?.[c.key] ?? ""))
+        );
       }
 
       doc.end();
       await done;
 
-      const pdfBuffer = Buffer.concat(chunks);
-
       return {
         status: 200,
         headers: {
           "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="chat-export.pdf"`,
+          "Content-Disposition": 'attachment; filename="chat-export.pdf"',
         },
-        body: pdfBuffer,
+        body: Buffer.concat(buffers),
       };
     } catch (e) {
-      return { status: 500, jsonBody: { error: "exportPdf failed", details: String(e) } };
+      return {
+        status: 500,
+        jsonBody: { error: "exportPdf failed", details: String(e) },
+      };
     }
   },
 });
+
 
