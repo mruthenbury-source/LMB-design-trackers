@@ -1,472 +1,292 @@
 import { app } from "@azure/functions";
-import { BlobServiceClient } from "@azure/storage-blob";
+import PDFDocument from "pdfkit";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-/**
- * Deterministic /api/chat
- * - NO OpenAI calls.
- * - Answers ONLY using the state.json data in Azure Blob Storage.
- * - Supports "TEMPLATE:<id>\nPARAMS:<json>" prompts emitted by ChatOverlay quick questions.
- *
- * Expected storage layout (defaults can be overridden with env vars):
- *   container: workback
- *   state blob: state.json
- *   backups weekly: backups/weekly/<anything with YYYY-MM-DD>.json
- *
- * Env vars:
- *   BLOB_CONNECTION_STRING (or AzureWebJobsStorage)
- *   STATE_CONTAINER (default "workback")
- *   STATE_BLOB (default "state.json")
- *   BACKUP_PREFIX (default "backups/weekly/")
- *   BACKUP_MAX_BYTES (default 8_000_000)
- */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-function safeStr(v) {
-  return (v ?? "").toString().trim();
+const BRAND = {
+  companyName: "LMB Design Trackers",
+  headerFill: "#111827",
+  headerText: "#FFFFFF",
+  subText: "#6B7280",
+  tableHeaderFill: "#F3F4F6",
+  zebraFill: "#FAFAFA",
+  line: "#D1D5DB",
+  logoFile: "logo.png",
+};
+
+function safe(v) {
+  if (v === null || v === undefined) return "";
+  return typeof v === "string" ? v : JSON.stringify(v);
 }
 
-function isoToUtcDate(s) {
-  if (!s) return null;
-  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  return Number.isNaN(dt.getTime()) ? null : dt;
-}
-
-function addDaysUTC(iso, days) {
-  const dt = isoToUtcDate(iso);
-  if (!dt || typeof days !== "number") return null;
-  const out = new Date(dt.getTime() + days * 86400000);
-  return out.toISOString().slice(0, 10);
-}
-
-function diffDaysUTC(aISO, bISO) {
-  const a = isoToUtcDate(aISO);
-  const b = isoToUtcDate(bISO);
-  if (!a || !b) return null;
-  return Math.round((b.getTime() - a.getTime()) / 86400000);
-}
-
-function YESNO(b) {
-  return b ? "YES" : "NO";
-}
-
-function getBlobClients() {
-  const conn = process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
-  const containerName = process.env.STATE_CONTAINER || "workback";
-  if (!conn) throw new Error("Storage connection string is not set (BLOB_CONNECTION_STRING or AzureWebJobsStorage)");
-  const service = BlobServiceClient.fromConnectionString(conn);
-  return { container: service.getContainerClient(containerName) };
-}
-
-async function streamToString(readable) {
-  return await new Promise((resolve, reject) => {
-    const chunks = [];
-    readable.on("data", (d) => chunks.push(d));
-    readable.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    readable.on("error", reject);
-  });
-}
-
-async function readJsonBlob(container, blobName, maxBytes = 8_000_000) {
-  const blob = container.getBlobClient(blobName);
-  const props = await blob.getProperties().catch(() => null);
-  if (props && props.contentLength && props.contentLength > maxBytes) {
-    throw new Error(`Blob too large (${props.contentLength} bytes) for deterministic function limit`);
-  }
-  const dl = await blob.download();
-  const text = await streamToString(dl.readableStreamBody);
-  return text ? JSON.parse(text) : null;
-}
-
-/* ---------------- index build ---------------- */
-
-function buildIndexFromState(state) {
-  const projects = Array.isArray(state?.projects) ? state.projects : [];
-  const globalA = Number(state?.globalDaysReqToStatusA ?? 28);
-  const globalF = Number(state?.globalDaysStatusAToFirstIssue ?? 28);
-
-  // programme levels
-  const programme = projects.flatMap((p) =>
-    (p.master || []).flatMap((m) =>
-      (m.levels || []).map((lv) => ({
-        project: safeStr(p.name),
-        blockZone: safeStr(m.blockZone),
-        level: safeStr(lv.name),
-        startDate: safeStr(lv.startDate),
-        finishDate: safeStr(lv.finishDate),
-      }))
-    )
-  );
-
-  // tracker rows
-  const rows = [];
-  projects.forEach((p) => {
-    const responsibilities = Array.isArray(p.responsibilities) ? p.responsibilities : [];
-    const pages = Array.isArray(p.pages) ? p.pages : [];
-
-    const supplierByRespId = new Map(responsibilities.map((r) => [r.id, safeStr(r.supplier)]));
-
-    pages
-      .filter((pg) => !pg?.meta?.isMaster)
-      .forEach((pg) => {
-        const supplier = supplierByRespId.get(pg?.meta?.responsibilityId) || "—";
-        (pg.rows || [])
-          .filter((r) => r && r.kind !== "header")
-          .filter((r) => !r.notRequired)
-          .forEach((r) => {
-            const anchorKey = safeStr(r.anchorKey) || "requiredOnSite";
-            const anchor = safeStr(r.anchorDateISO);
-
-            const daysA = Number(r.overrideDaysReqToStatusA ?? globalA);
-            const daysF = Number(r.overrideDaysStatusAToFirstIssue ?? globalF);
-
-            // Derive dates from anchor
-            let requiredOnSite = null;
-            let statusA = null;
-            let firstIssue = null;
-
-            if (anchorKey === "requiredOnSite") {
-              requiredOnSite = anchor || null;
-              statusA = requiredOnSite ? addDaysUTC(requiredOnSite, -daysA) : null;
-              firstIssue = statusA ? addDaysUTC(statusA, daysF) : null;
-            } else if (anchorKey === "statusA") {
-              statusA = anchor || null;
-              requiredOnSite = statusA ? addDaysUTC(statusA, daysA) : null;
-              firstIssue = statusA ? addDaysUTC(statusA, daysF) : null;
-            } else if (anchorKey === "firstIssue") {
-              firstIssue = anchor || null;
-              statusA = firstIssue ? addDaysUTC(firstIssue, -daysF) : null;
-              requiredOnSite = statusA ? addDaysUTC(statusA, daysA) : null;
-            } else {
-              // fallback
-              requiredOnSite = anchor || null;
-              statusA = requiredOnSite ? addDaysUTC(requiredOnSite, -daysA) : null;
-              firstIssue = statusA ? addDaysUTC(statusA, daysF) : null;
-            }
-
-            const comments = Array.isArray(r.comments) ? r.comments : [];
-            const commentsText = comments
-              .map((c) => [safeStr(c?.dateISO), safeStr(c?.name || c?.lockedBy), safeStr(c?.text)].filter(Boolean).join(" — "))
-              .filter(Boolean)
-              .join("\n");
-
-            rows.push({
-              key: [safeStr(p.name), safeStr(pg.name), safeStr(supplier), safeStr(r.item)].join(" | "),
-              project: safeStr(p.name),
-              responsibility: safeStr(pg.name),
-              supplier,
-              item: safeStr(r.item),
-              requiredOnSite,
-              statusA,
-              firstIssue,
-              ticks: {
-                statusA: !!r.statusADone,
-                firstIssue: !!r.firstIssueDone,
-                completed: !!r.completed,
-              },
-              comments: commentsText,
-              commentsCount: comments.length,
-            });
-          });
-      });
-  });
-
-  return { programme, rows, projectNames: projects.map((p) => safeStr(p.name)).filter(Boolean) };
-}
-
-/* ---------------- filters + formatting ---------------- */
-
-function withinRange(level, fromISO, toISO) {
-  const s = isoToUtcDate(level?.startDate);
-  const f = isoToUtcDate(level?.finishDate);
-  const a = isoToUtcDate(fromISO);
-  const b = isoToUtcDate(toISO);
-  if (!s || !f || !a || !b) return false;
-  // overlap inclusive
-  return !(f.getTime() < a.getTime() || s.getTime() > b.getTime());
-}
-
-function formatRowsTable(rows, limit = 120) {
-  const header = ["Project", "Responsibility", "Supplier", "Item", "Req On Site", "Status A", "First Issue", "Done?"].join(" | ");
-  const sep = ["---","---","---","---","---","---","---","---"].join(" | ");
-  const body = rows.slice(0, limit).map((r) => [
-    r.project || "—",
-    r.responsibility || "—",
-    r.supplier || "—",
-    r.item || "—",
-    r.requiredOnSite || "—",
-    r.statusA || "—",
-    r.firstIssue || "—",
-    YESNO(!!r.ticks?.completed),
-  ].join(" | "));
-  const more = rows.length > limit ? `\n\nShowing first ${limit} of ${rows.length}. Narrow by project to see more.` : "";
-  return [header, sep, ...body].join("\n") + more;
-}
-
-function formatProgrammeTable(levels, limit = 200) {
-  const header = ["Project", "Block/Zone", "Level", "Start", "Finish"].join(" | ");
-  const sep = ["---","---","---","---","---"].join(" | ");
-  const body = levels.slice(0, limit).map((p) => [
-    p.project || "—",
-    p.blockZone || "—",
-    p.level || "—",
-    p.startDate || "—",
-    p.finishDate || "—",
-  ].join(" | "));
-  const more = levels.length > limit ? `\n\nShowing first ${limit} of ${levels.length}. Narrow by project to see more.` : "";
-  return [header, sep, ...body].join("\n") + more;
-}
-
-function parseTemplateFromUserText(text) {
-  const t = String(text || "");
-  const m = t.match(/^\s*TEMPLATE:([a-z0-9_]+)\s*\n\s*PARAMS:(\{[\s\S]*\})\s*$/i);
-  if (!m) return null;
-  const id = m[1];
-  let params = {};
+function loadLogo() {
   try {
-    params = JSON.parse(m[2]);
+    return fs.readFileSync(path.join(__dirname, "..", "assets", BRAND.logoFile));
   } catch {
-    params = {};
+    return null;
   }
-  return { id, params };
 }
 
-/* ---------------- template handlers ---------------- */
+function drawChrome(doc, title, logoBuf, pageNo) {
+  const L = doc.page.margins.left;
+  const R = doc.page.width - doc.page.margins.right;
+  const B = doc.page.height - doc.page.margins.bottom;
 
-function handleTemplate({ id, params }, idx, todayISO) {
-  const project = safeStr(params?.project);
-  const dateFrom = safeStr(params?.dateFrom);
-  const dateTo = safeStr(params?.dateTo);
-  const asOfDate = safeStr(params?.asOfDate);
+  // Header bar
+  const barH = 42;
+  doc.save();
+  doc.fillColor(BRAND.headerFill);
+  doc.rect(0, 0, doc.page.width, barH).fill();
 
-  const today = todayISO;
+  if (logoBuf) doc.image(logoBuf, L, 8, { height: barH - 16 });
 
-  const rows = idx.rows;
-  const programme = idx.programme;
+  const titleX = L + (logoBuf ? 120 : 0);
+  doc.fillColor(BRAND.headerText).font("Helvetica-Bold").fontSize(14);
+  doc.text(title, titleX, 12, { width: R - titleX, lineBreak: false });
 
-  const byProject = (r) => !project || safeStr(r.project).toLowerCase() === project.toLowerCase();
+  doc.restore();
 
-  const overdue = (iso) => {
-    const d = isoToUtcDate(iso);
-    const t = isoToUtcDate(today);
-    if (!d || !t) return false;
-    return d.getTime() < t.getTime();
-  };
+  // Footer
+  const footerY = B + 10;
+  doc.save();
+  doc.strokeColor(BRAND.line);
+  doc.moveTo(L, footerY).lineTo(R, footerY).stroke();
 
-  if (id === "overdue_first_issue_all" || id === "overdue_first_issue_project") {
-    const out = rows.filter(byProject).filter((r) => !r.ticks?.firstIssue).filter((r) => overdue(r.firstIssue));
-    out.sort((a, b) => (safeStr(a.firstIssue) < safeStr(b.firstIssue) ? -1 : 1));
-    return {
-      title: `Overdue First Issue${project ? ` — ${project}` : ""} (today ${today})`,
-      body: formatRowsTable(out),
-    };
-  }
-
-  if (id === "overdue_statusA_all" || id === "overdue_statusA_project") {
-    const out = rows.filter(byProject).filter((r) => !r.ticks?.statusA).filter((r) => overdue(r.statusA));
-    out.sort((a, b) => (safeStr(a.statusA) < safeStr(b.statusA) ? -1 : 1));
-    return {
-      title: `Overdue Status A${project ? ` — ${project}` : ""} (today ${today})`,
-      body: formatRowsTable(out),
-    };
-  }
-
-  if (id === "statusA_approved_all" || id === "statusA_approved_project") {
-    const out = rows.filter(byProject).filter((r) => !!r.ticks?.statusA);
-    out.sort((a, b) => (safeStr(a.statusA) < safeStr(b.statusA) ? -1 : 1));
-    return {
-      title: `Status A Approved${project ? ` — ${project}` : ""}`,
-      body: formatRowsTable(out),
-    };
-  }
-
-  if (id === "done_all" || id === "done_project") {
-    const out = rows.filter(byProject).filter((r) => !!r.ticks?.completed);
-    out.sort((a, b) => (safeStr(a.requiredOnSite) < safeStr(b.requiredOnSite) ? -1 : 1));
-    return {
-      title: `Done items${project ? ` — ${project}` : ""}`,
-      body: formatRowsTable(out),
-    };
-  }
-
-  if (id === "programme_range_all" || id === "programme_range_project") {
-    const out = programme
-      .filter((p) => !project || safeStr(p.project).toLowerCase() === project.toLowerCase())
-      .filter((p) => withinRange(p, dateFrom, dateTo));
-    out.sort((a, b) => (safeStr(a.startDate) < safeStr(b.startDate) ? -1 : 1));
-    return {
-      title: `Programme on site ${dateFrom} → ${dateTo}${project ? ` — ${project}` : ""}`,
-      body: formatProgrammeTable(out),
-    };
-  }
-
-  if (id === "comments_all" || id === "comments_project") {
-    const out = rows
-      .filter(byProject)
-      .filter((r) => (r.commentsCount || 0) > 0)
-      .map((r) => ({
-        project: r.project,
-        responsibility: r.responsibility,
-        supplier: r.supplier,
-        item: r.item,
-        comments: r.comments,
-        commentsCount: r.commentsCount,
-      }));
-
-    // keep response readable
-    const maxItems = 120;
-    const lines = out.slice(0, maxItems).map((r) => {
-      return `• ${r.project} | ${r.responsibility} | ${r.supplier} | ${r.item}\n${r.comments}`;
-    });
-
-    const more = out.length > maxItems ? `\n\nShowing first ${maxItems} of ${out.length}. Narrow by project to see more.` : "";
-    return {
-      title: `Comments${project ? ` — ${project}` : ""}`,
-      body: lines.join("\n\n") + more,
-    };
-  }
-
-  if (id === "compare_programme_all" || id === "compare_programme_project") {
-    // This one is handled outside (needs a backup snapshot). Return a signal.
-    return { needsBackupCompare: true, project, asOfDate };
-  }
-
-  return { title: "Unknown quick question", body: "That template id is not supported by the deterministic backend." };
-}
-
-/* ---------------- backup compare helpers ---------------- */
-
-function extractAnyDateFromName(name) {
-  const m = String(name || "").match(/(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : null;
-}
-
-function indexProgramme(programme) {
-  const map = new Map();
-  programme.forEach((p) => {
-    const k = [safeStr(p.project), safeStr(p.blockZone), safeStr(p.level)].join(" | ");
-    map.set(k, p);
+  doc.fillColor(BRAND.subText).font("Helvetica").fontSize(9);
+  doc.text(`${BRAND.companyName} • Generated ${new Date().toLocaleString()}`, L, footerY + 6, {
+    width: R - L,
+    align: "left",
+    lineBreak: false,
   });
-  return map;
+  doc.text(`Page ${pageNo}`, L, footerY + 6, {
+    width: R - L,
+    align: "right",
+    lineBreak: false,
+  });
+  doc.restore();
 }
 
-function diffProgramme(cur, prev, projectFilter) {
-  const curMap = indexProgramme(cur);
-  const prevMap = indexProgramme(prev);
-  const changes = [];
+function buildColumnsFromRows(rows, pageW) {
+  // Preferred tracker columns (your main table shape)
+  const preferred = [
+    { key: "project", label: "Project", w: 90 },
+    { key: "supplier", label: "Supplier", w: 75 },
+    { key: "responsibility", label: "Resp", w: 85 },
+    { key: "item", label: "Item", w: 999 }, // auto-fill
+    { key: "requiredOnSite", label: "Req", w: 65 },
+    { key: "statusA", label: "A", w: 60 },
+  ];
 
-  for (const [k, c] of curMap.entries()) {
-    if (projectFilter && safeStr(c.project).toLowerCase() !== projectFilter.toLowerCase()) continue;
-    const p = prevMap.get(k);
-    if (!p) continue;
-    if (safeStr(c.startDate) !== safeStr(p.startDate) || safeStr(c.finishDate) !== safeStr(p.finishDate)) {
-      changes.push({
-        project: c.project,
-        blockZone: c.blockZone,
-        level: c.level,
-        start: `${safeStr(p.startDate) || "—"} → ${safeStr(c.startDate) || "—"}`,
-        finish: `${safeStr(p.finishDate) || "—"} → ${safeStr(c.finishDate) || "—"}`,
-      });
-    }
+  const first = rows && rows.length ? rows[0] : null;
+  const keys = first && typeof first === "object" ? Object.keys(first) : [];
+
+  // If rows don’t match the preferred keys, fall back to detected keys
+  const preferredKeys = new Set(preferred.map((c) => c.key));
+  const hasPreferred = keys.some((k) => preferredKeys.has(k));
+
+  let cols;
+  if (hasPreferred) {
+    cols = preferred;
+  } else {
+    // Use up to 6 keys from the data
+    const chosen = keys.slice(0, 6);
+    cols = chosen.map((k, idx) => ({
+      key: k,
+      label: k,
+      w: idx === chosen.length - 1 ? 999 : Math.floor(pageW / Math.max(2, chosen.length)), // last auto-fill
+    }));
+    // ensure there is an auto-fill column
+    if (cols.length) cols[cols.length - 1].w = 999;
   }
 
-  changes.sort((a, b) => (safeStr(a.project) + safeStr(a.blockZone) + safeStr(a.level)).localeCompare(safeStr(b.project) + safeStr(b.blockZone) + safeStr(b.level)));
-  return changes;
+  // Auto-fit last/auto column to fill remaining width exactly
+  const fixedW = cols.filter((c) => c.w !== 999).reduce((a, c) => a + c.w, 0);
+  const autoIdx = cols.findIndex((c) => c.w === 999);
+  const autoW = Math.max(160, pageW - fixedW);
+  if (autoIdx >= 0) cols[autoIdx] = { ...cols[autoIdx], w: autoW };
+
+  // Scale widths to fit exactly (prevents drift)
+  const totalTarget = cols.reduce((a, c) => a + c.w, 0);
+  const scale = pageW / totalTarget;
+  let scaled = cols.map((c) => ({ ...c, w: Math.floor(c.w * scale) }));
+  const sum = scaled.reduce((a, c) => a + c.w, 0);
+  scaled[scaled.length - 1].w += pageW - sum; // exact fit
+
+  return scaled;
 }
 
-function formatProgrammeChanges(changes, limit = 200) {
-  const header = ["Project", "Block/Zone", "Level", "Start (before → after)", "Finish (before → after)"].join(" | ");
-  const sep = ["---","---","---","---","---"].join(" | ");
-  const body = changes.slice(0, limit).map((c) => [c.project, c.blockZone, c.level, c.start, c.finish].join(" | "));
-  const more = changes.length > limit ? `\n\nShowing first ${limit} of ${changes.length}. Narrow by project to see more.` : "";
-  return [header, sep, ...body].join("\n") + more;
-}
-
-/* ---------------- main handler ---------------- */
-
-app.http("chat", {
+app.http("exportPdf", {
   methods: ["POST"],
   authLevel: "anonymous",
   handler: async (req) => {
     try {
       const body = await req.json().catch(() => ({}));
-      const messages = Array.isArray(body?.messages) ? body.messages : [];
-      const appContext = body?.context || {};
-      const userText = safeStr(messages[messages.length - 1]?.content);
+      const title = safe(body.title || "Chat Export");
+      const answer = safe(body.answer || "");
+      const rows = Array.isArray(body.rows) ? body.rows : [];
+      const meta = body.meta && typeof body.meta === "object" ? body.meta : null;
 
-      const todayISO = safeStr(appContext?.today) || new Date().toISOString().slice(0, 10);
+      const doc = new PDFDocument({ size: "A4", margin: 40 });
+      const buffers = [];
+      doc.on("data", (d) => buffers.push(d));
+      const done = new Promise((r) => doc.on("end", r));
 
-      const { container } = getBlobClients();
-      const stateBlob = process.env.STATE_BLOB || "state.json";
-      const state = await readJsonBlob(container, stateBlob);
-      const idx = buildIndexFromState(state || {});
+      const logo = loadLogo();
+      let pageNo = 1;
 
-      // Template-based deterministic quick questions
-      const tpl = parseTemplateFromUserText(userText);
-      if (tpl) {
-        const result = handleTemplate(tpl, idx, todayISO);
+      const newPage = () => {
+        doc.addPage();
+        pageNo += 1;
+        drawChrome(doc, title, logo, pageNo);
+        doc.y = 60;
+      };
 
-        if (result?.needsBackupCompare) {
-          const prefix = process.env.BACKUP_PREFIX || "backups/weekly/";
-          const asOfDate = safeStr(result.asOfDate);
-          if (!asOfDate) {
-            return { status: 200, jsonBody: { answer: "Please provide an as-of date (YYYY-MM-DD) to compare against current." } };
+      // Page 1 chrome
+      drawChrome(doc, title, logo, pageNo);
+      doc.y = 60;
+
+      const L = doc.page.margins.left;
+      const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 60;
+
+      // --- TABLE FIRST (always on page 1) ---
+      doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Data");
+      doc.moveDown(0.5);
+
+      if (!rows.length) {
+        doc.font("Helvetica").fontSize(10).fillColor(BRAND.subText).text(
+          "No rows were provided to export. (Your export request must include body.rows as an array.)",
+          { width: pageW }
+        );
+      } else {
+        const cols = buildColumnsFromRows(rows, pageW);
+        const rowH = 18;
+
+        // x positions for perfect alignment
+        const xPos = [L];
+        for (let i = 0; i < cols.length; i++) xPos.push(xPos[i] + cols[i].w);
+
+        const drawCellText = (text, x, y, w, isHeader) => {
+          const padX = 4;
+          const padY = 5;
+          doc.save();
+          doc.rect(x + 1, y + 1, w - 2, rowH - 2).clip();
+          doc.font(isHeader ? "Helvetica-Bold" : "Helvetica").fontSize(9).fillColor("#111827");
+          doc.text(safe(text), x + padX, y + padY, {
+            width: w - padX * 2,
+            lineBreak: false,
+            ellipsis: true,
+          });
+          doc.restore();
+        };
+
+        const drawGrid = (y) => {
+          doc.save();
+          doc.strokeColor(BRAND.line).strokeOpacity(0.45);
+          // verticals
+          for (let i = 0; i < xPos.length; i++) {
+            doc.moveTo(xPos[i], y).lineTo(xPos[i], y + rowH).stroke();
+          }
+          // bottom
+          doc.moveTo(L, y + rowH).lineTo(L + pageW, y + rowH).stroke();
+          doc.restore();
+        };
+
+        const drawHeader = () => {
+          const y = doc.y;
+
+          doc.save();
+          doc.fillColor(BRAND.tableHeaderFill);
+          doc.rect(L, y, pageW, rowH).fill();
+          doc.restore();
+
+          for (let i = 0; i < cols.length; i++) {
+            drawCellText(cols[i].label, xPos[i], y, cols[i].w, true);
+          }
+          drawGrid(y);
+
+          doc.y = y + rowH;
+        };
+
+        const drawRow = (r, idx) => {
+          const y = doc.y;
+
+          if (idx % 2 === 1) {
+            doc.save();
+            doc.fillColor(BRAND.zebraFill);
+            doc.rect(L, y, pageW, rowH).fill();
+            doc.restore();
           }
 
-          // Find the newest backup <= asOfDate
-          const candidates = [];
-          for await (const blob of container.listBlobsFlat({ prefix })) {
-            const d = extractAnyDateFromName(blob.name);
-            if (!d) continue;
-            if (d <= asOfDate) candidates.push({ name: blob.name, date: d });
+          for (let i = 0; i < cols.length; i++) {
+            const c = cols[i];
+            drawCellText(r?.[c.key] ?? "", xPos[i], y, c.w, false);
           }
-          candidates.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+          drawGrid(y);
 
-          if (!candidates.length) {
-            return {
-              status: 200,
-              jsonBody: { answer: `No weekly backups found on or before ${asOfDate} under prefix "${prefix}".` },
-            };
+          doc.y = y + rowH;
+        };
+
+        // Ensure table starts right under header
+        drawHeader();
+
+        const MAX = 1500;
+        for (let i = 0; i < Math.min(rows.length, MAX); i++) {
+          if (doc.y > bottomLimit() - rowH) {
+            newPage();
+            doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Data (continued)");
+            doc.moveDown(0.5);
+            drawHeader();
           }
-
-          const chosen = candidates[0];
-          const maxBytes = Number(process.env.BACKUP_MAX_BYTES || 8_000_000);
-          const backupState = await readJsonBlob(container, chosen.name, maxBytes);
-          const backupIdx = buildIndexFromState(backupState || {});
-
-          const changes = diffProgramme(idx.programme, backupIdx.programme, result.project);
-          const title = `Programme changes (${chosen.date} → current)${result.project ? ` — ${result.project}` : ""}`;
-          const bodyText = changes.length ? formatProgrammeChanges(changes) : "No programme date changes found between the selected backup and current.";
-          return { status: 200, jsonBody: { answer: `${title}\n\n${bodyText}` } };
+          drawRow(rows[i], i);
         }
 
-        return { status: 200, jsonBody: { answer: `${result.title}\n\n${result.body}` } };
+        if (rows.length > MAX) {
+          if (doc.y > bottomLimit() - 30) newPage();
+          doc.moveDown(1);
+          doc.font("Helvetica").fontSize(9).fillColor(BRAND.subText).text(`Showing first ${MAX} of ${rows.length} rows.`);
+        }
       }
 
-      // Free-text fallback: keep it deterministic and explicit.
-      const help = [
-        "This chat is fully deterministic (no AI).",
-        "",
-        "Use the Quick questions dropdown, or ask using this format:",
-        "TEMPLATE:<id>",
-        'PARAMS:{"project":"Holloway","dateFrom":"2026-01-01","dateTo":"2026-01-31"}',
-        "",
-        "Supported TEMPLATE ids:",
-        "- overdue_first_issue_all / overdue_first_issue_project",
-        "- overdue_statusA_all / overdue_statusA_project",
-        "- statusA_approved_all / statusA_approved_project",
-        "- done_all / done_project",
-        "- programme_range_all / programme_range_project",
-        "- compare_programme_all / compare_programme_project",
-        "- comments_all / comments_project",
-      ].join("\n");
+      // --- ANSWER AFTER (page 2) ---
+      newPage();
 
-      return { status: 200, jsonBody: { answer: help } };
+      // optional meta on answer page
+      if (meta) {
+        doc.font("Helvetica-Bold").fontSize(11).fillColor("#111827").text("Parameters");
+        doc.moveDown(0.3);
+        doc.font("Helvetica").fontSize(10).fillColor("#111827");
+        for (const k of Object.keys(meta)) {
+          doc.fillColor(BRAND.subText).font("Helvetica-Bold").text(`${k}: `, { continued: true });
+          doc.fillColor("#111827").font("Helvetica").text(safe(meta[k]));
+          if (doc.y > bottomLimit()) newPage();
+        }
+        doc.moveDown(0.8);
+      }
+
+      doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Answer");
+      doc.moveDown(0.5);
+      doc.font("Helvetica").fontSize(10).fillColor("#111827");
+      doc.text(answer, { width: pageW });
+
+      doc.end();
+      await done;
+
+      return {
+        status: 200,
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": 'attachment; filename="chat-export.pdf"',
+        },
+        body: Buffer.concat(buffers),
+      };
     } catch (e) {
-      return { status: 500, jsonBody: { error: "deterministic chat handler error", details: String(e) } };
+      return { status: 500, jsonBody: { error: "exportPdf failed", details: String(e) } };
     }
   },
 });
+
