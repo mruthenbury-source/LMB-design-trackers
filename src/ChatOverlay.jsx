@@ -248,93 +248,123 @@ const listRef = useRef(null);
           )}
         </div>
 
-        {/* Footer ALWAYS visible */}
-        <div style={styles.footer}>
-          {/* Quick questions */}
-          <div style={styles.quickWrap}>
-            <div style={styles.quickRow}>
-              <select value={quickId} onChange={(e) => { setQuickId(e.target.value); setQuickParams({ project: "", dateFrom: "", dateTo: "", asOfDate: "" }); }} style={styles.select}>
-                <option value="">Quick questions…</option>
-                {quickTemplates.map((q) => (
-                  <option key={q.id} value={q.id}>
-                    {q.label}
-                  </option>
-                ))}
-              </select>
-
-              <button
-                type="button"
-                onClick={insertQuick}
-                disabled={!buildQuickPrompt()}
-                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-              >
-                Insert
-              </button>
-
-              <button
-                type="button"
-                onClick={askQuick}
-                disabled={!buildQuickPrompt()}
-                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-              >
-                Ask
-              </button>
-            </div>
-
-            {(selectedQuick?.params?.length > 0) && (
-  <div style={styles.quickRow}>
-    {selectedQuick.params.some((p) => p.type === "project") && (
+        
+{/* Footer ALWAYS visible */}
+<div style={styles.footer}>
+  {/* Quick questions */}
+  <div style={styles.quickWrap}>
+    <div style={styles.quickRow}>
       <select
-        value={quickParams.project}
-        onChange={(e) => setQuickParams((s) => ({ ...s, project: e.target.value }))}
+        value={quickId}
+        onChange={(e) => {
+          setQuickId(e.target.value);
+          setQuickParams({ project: "", dateFrom: "", dateTo: "", asOfDate: "" });
+        }}
         style={styles.select}
       >
-        <option value="">{projectOptions.length ? "Select project…" : "No projects loaded"}</option>
-        {projectOptions.map((p) => (
-          <option key={p} value={p}>
-            {p}
+        <option value="">Quick questions…</option>
+        {quickTemplates.map((q) => (
+          <option key={q.id} value={q.id}>
+            {q.label}
           </option>
         ))}
       </select>
-    )}
 
-    {selectedQuick.params.some((p) => p.key === "dateFrom") && (
-      <input
-        type="date"
-        value={quickParams.dateFrom}
-        onChange={(e) => setQuickParams((s) => ({ ...s, dateFrom: e.target.value }))}
-        style={styles.input}
-        title="From"
-      />
-    )}
+      <button
+        type="button"
+        onClick={insertQuick}
+        disabled={!buildQuickPrompt()}
+        style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+      >
+        Insert
+      </button>
 
-    {selectedQuick.params.some((p) => p.key === "dateTo") && (
-      <input
-        type="date"
-        value={quickParams.dateTo}
-        onChange={(e) => setQuickParams((s) => ({ ...s, dateTo: e.target.value }))}
-        style={styles.input}
-        title="To"
-      />
-    )}
+      <button
+        type="button"
+        onClick={askQuick}
+        disabled={!buildQuickPrompt()}
+        style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+      >
+        Ask
+      </button>
+    </div>
 
-    {selectedQuick.params.some((p) => p.key === "asOfDate") && (
-      <input
-        type="date"
-        value={quickParams.asOfDate}
-        onChange={(e) => setQuickParams((s) => ({ ...s, asOfDate: e.target.value }))}
-        style={styles.input}
-        title="As-of date"
-      />
+    {selectedQuick?.params?.length > 0 && (
+      <div style={styles.quickRow}>
+        {selectedQuick.params.some((p) => p.type === "project") && (
+          <select
+            value={quickParams.project}
+            onChange={(e) => setQuickParams((s) => ({ ...s, project: e.target.value }))}
+            style={styles.select}
+          >
+            <option value="">{projectOptions.length ? "Select project…" : "No projects loaded"}</option>
+            {projectOptions.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {selectedQuick.params.some((p) => p.key === "dateFrom") && (
+          <input
+            type="date"
+            value={quickParams.dateFrom}
+            onChange={(e) => setQuickParams((s) => ({ ...s, dateFrom: e.target.value }))}
+            style={styles.input}
+            title="From"
+          />
+        )}
+
+        {selectedQuick.params.some((p) => p.key === "dateTo") && (
+          <input
+            type="date"
+            value={quickParams.dateTo}
+            onChange={(e) => setQuickParams((s) => ({ ...s, dateTo: e.target.value }))}
+            style={styles.input}
+            title="To"
+          />
+        )}
+
+        {selectedQuick.params.some((p) => p.key === "asOfDate") && (
+          <input
+            type="date"
+            value={quickParams.asOfDate}
+            onChange={(e) => setQuickParams((s) => ({ ...s, asOfDate: e.target.value }))}
+            style={styles.input}
+            title="As-of date"
+          />
+        )}
+      </div>
     )}
   </div>
-)}
-    >
-      Send
-    </button>
+
+  {/* Query box */}
+  <div style={styles.queryBlock}>
+    <div style={styles.queryBoxLabel}>Query</div>
+
+    <div style={styles.composer}>
+      <textarea
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="Type a question, or use Quick questions above…"
+        style={styles.textarea}
+        disabled={busy}
+      />
+    </div>
+
+    <div style={styles.sendRow}>
+      <button
+        type="button"
+        onClick={() => handleSend()}
+        disabled={busy || !input.trim()}
+        style={{ ...styles.sendBtn, ...(busy || !input.trim() ? styles.btnDisabled : null) }}
+      >
+        Send
+      </button>
+    </div>
   </div>
 </div>
-        </div>
       </div>
     </div>
   );
