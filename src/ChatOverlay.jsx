@@ -269,100 +269,99 @@ function buildQuickPrompt() {
 
         {/* Footer ALWAYS visible */}
         <div style={styles.footer}>
-          {/* Quick questions */}
-          <div style={styles.quickWrap}>
-            <div style={styles.quickRow}>
-                onChange={(e) => { setQuickId(e.target.value); setQuickProject(""); setQuickDateFrom(""); setQuickDateTo(""); setQuickAsOfDate(""); }}
-                <option value="">Quick questions…</option>
-                {quickTemplates.map((q) => (
-                  <option key={q.id} value={q.id}>
-                    {q.label}
-                  </option>
-                ))}
-              </select>
 
-              <button
-                type="button"
-                onClick={insertQuick}
-                disabled={!buildQuickPrompt()}
-                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-              >
-                Insert
-              </button>
-
-              <button
-                type="button"
-                onClick={askQuick}
-                disabled={!buildQuickPrompt()}
-                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-              >
-                Ask
-              </button>
-            </div>
-
-{(selectedQuick?.needsProject || selectedQuick?.needsDateRange || selectedQuick?.needsAsOf) && (
+{/* Quick questions */}
+<div style={styles.quickWrap}>
   <div style={styles.quickRow}>
-    {selectedQuick?.needsProject && (
-      <>
-        {projectOptions.length ? (
-          <select
-            value={quickProject}
-            onChange={(e) => setQuickProject(e.target.value)}
-            style={styles.select}
-          >
-            <option value="">{metaLoaded ? "Select project…" : "Loading projects…"}</option>
-            {projectOptions.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            value={quickProject}
-            onChange={(e) => setQuickProject(e.target.value)}
-            placeholder={metaLoaded ? "Project name…" : "Loading projects…"}
-            style={styles.input}
-          />
-        )}
-      </>
-    )}
+    <select
+      value={quickId}
+      onChange={(e) => {
+        setQuickId(e.target.value);
+        setQuickProject("");
+        setQuickDateFrom("");
+        setQuickDateTo("");
+        setQuickAsOfDate("");
+      }}
+      style={styles.select}
+    >
+      <option value="">Quick questions…</option>
+      {quickTemplates.map((q) => (
+        <option key={q.id} value={q.id}>
+          {q.label}
+        </option>
+      ))}
+    </select>
 
-    {selectedQuick?.needsDateRange && (
-      <>
-        <input
-          type="date"
-          value={quickDateFrom}
-          onChange={(e) => setQuickDateFrom(e.target.value)}
-          style={styles.input}
-          title="From"
-        />
-        <input
-          type="date"
-          value={quickDateTo}
-          onChange={(e) => setQuickDateTo(e.target.value)}
-          style={styles.input}
-          title="To"
-        />
-      </>
-    )}
+    <button
+      type="button"
+      onClick={insertQuick}
+      disabled={!buildQuickPrompt()}
+      style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+    >
+      Insert
+    </button>
 
-    {selectedQuick?.needsAsOf && (
-      <input
-        type="date"
-        value={quickAsOfDate}
-        onChange={(e) => setQuickAsOfDate(e.target.value)}
-        style={styles.input}
-        title="As-of date (uses backups)"
-      />
-    )}
+    <button
+      type="button"
+      onClick={askQuick}
+      disabled={!buildQuickPrompt()}
+      style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+    >
+      Ask
+    </button>
   </div>
-)}
-          </div>
 
-{/* FREE QUERY BOX (always visible, below quick questions) */}
-<div style={styles.queryBlock}>
-  <div style={styles.queryBoxLabel}>Ask anything:</div>
+  {(selectedQuick?.needsProject || selectedQuick?.needsDateRange || selectedQuick?.needsAsOf) && (
+    <div style={styles.quickRow}>
+      {selectedQuick?.needsProject && (
+        <select
+          value={quickProject}
+          onChange={(e) => setQuickProject(e.target.value)}
+          style={styles.select}
+        >
+          <option value="">
+            {projectOptions.length ? "Select project…" : (metaLoaded ? "No projects found" : "Loading projects…")}
+          </option>
+          {projectOptions.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {selectedQuick?.needsDateRange && (
+        <>
+          <input
+            type="date"
+            value={quickDateFrom}
+            onChange={(e) => setQuickDateFrom(e.target.value)}
+            style={styles.input}
+            title="From"
+          />
+          <input
+            type="date"
+            value={quickDateTo}
+            onChange={(e) => setQuickDateTo(e.target.value)}
+            style={styles.input}
+            title="To"
+          />
+        </>
+      )}
+
+      {selectedQuick?.needsAsOf && (
+        <input
+          type="date"
+          value={quickAsOfDate}
+          onChange={(e) => setQuickAsOfDate(e.target.value)}
+          style={styles.input}
+          title="As-of date"
+        />
+      )}
+    </div>
+  )}
+</div>
+<div style={styles.queryBoxLabel}>Ask anything:</div>
 
   <textarea
     value={input}
