@@ -1,35 +1,30 @@
+
 import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
 
 /**
- * Deterministic chat endpoint (no LLM).
- * Reads authoritative state from Azure Blob Storage (container: workback, blob: state.json),
- * flattens into queryable "tables", parses the user's question using rules, and returns
- * deterministic answers + optional structured data.
+ * Deterministic /api/chat v2 (NO LLM)
+ * Reads state from Azure Blob: container=workback, blob=state.json (defaults)
+ * Adds follow-ups via queryState (stateless): client should send back queryState it receives.
  *
- * Env vars:
- * - BLOB_CONNECTION_STRING (preferred) or AzureWebJobsStorage
- * - STATE_CONTAINER (optional, default "workback")
- * - STATE_BLOB (optional, default "state.json")
+ * Response includes { queryState } but UI can ignore it without breaking.
  */
 
-/* ---------------- blob helpers ---------------- */
+/* ------------------------------ Blob helpers ------------------------------ */
 
-function getContainerClient() {
-  const conn =
-    process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
-  const containerName = process.env.STATE_CONTAINER || "workback";
-  if (!conn) {
-    throw new Error(
-      "Missing BLOB_CONNECTION_STRING or AzureWebJobsStorage for blob access."
-    );
-  }
-  const service = BlobServiceClient.fromConnectionString(conn);
-  return service.getContainerClient(containerName);
+function getConnString() {
+  return process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
+}
+
+function getContainerName() {
+  return process.env.STATE_CONTAINER || "workback";
+}
+
+function getStateBlobName() {
+  return process.env.STATE_BLOB || "state.json";
 }
 
 async function streamToString(readable) {
-  if (!readable) return "";
   return await new Promise((resolve, reject) => {
     const chunks = [];
     readable.on("data", (d) => chunks.push(d));
@@ -39,28 +34,27 @@ async function streamToString(readable) {
 }
 
 async function loadStateJson() {
-  const container = getContainerClient();
-  const blobName = process.env.STATE_BLOB || "state.json";
-  const blob = container.getBlobClient(blobName);
-
+  const conn = getConnString();
+  if (!conn) throw new Error("Missing BLOB_CONNECTION_STRING or AzureWebJobsStorage");
+  const service = BlobServiceClient.fromConnectionString(conn);
+  const container = service.getContainerClient(getContainerName());
+  const blob = container.getBlobClient(getStateBlobName());
   const dl = await blob.download();
   const text = await streamToString(dl.readableStreamBody);
   return text ? JSON.parse(text) : {};
 }
 
-/* ---------------- deterministic indexing ---------------- */
+/* ------------------------------ Date helpers ----------------------------- */
 
 function safeStr(v) {
   return (v ?? "").toString().trim();
 }
 
-function isoToDate(s) {
-  if (!s) return null;
-  const parts = String(s).split("-");
-  if (parts.length !== 3) return null;
-  const y = Number(parts[0]);
-  const m = Number(parts[1]);
-  const d = Number(parts[2]);
+function isoToDate(iso) {
+  if (!iso) return null;
+  const parts = String(iso).split("-");
+  if (parts.length < 3) return null;
+  const y = Number(parts[0]), m = Number(parts[1]), d = Number(parts[2]);
   if (!y || !m || !d) return null;
   return new Date(Date.UTC(y, m - 1, d));
 }
@@ -75,28 +69,25 @@ function subDaysISO(iso, days) {
   return addDaysISO(iso, -days);
 }
 
+/* ------------------------- Flatten state into tables ---------------------- */
+
 function buildIndexFromState(state) {
   const projects = Array.isArray(state?.projects) ? state.projects : [];
-
   const globalReqToStatusA = Number(state?.globalDaysReqToStatusA ?? 0);
-  const globalStatusAToFirstIssue = Number(
-    state?.globalDaysStatusAToFirstIssue ?? 0
-  );
+  const globalStatusAToFirstIssue = Number(state?.globalDaysStatusAToFirstIssue ?? 0);
 
-  // Programme schedule rows (master)
   const programme = [];
-  // Tracker rows (pages)
   const rows = [];
+  const dict = { projects: new Set(), suppliers: new Set(), responsibilities: new Set() };
 
-  for (const p of projects) {
+  projects.forEach((p) => {
     const projectName = safeStr(p?.name);
+    if (projectName) dict.projects.add(projectName);
 
-    // Programme: project.master[].levels[]
-    const masterBlocks = Array.isArray(p?.master) ? p.master : [];
-    for (const m of masterBlocks) {
+    // Programme/master
+    (p.master || []).forEach((m) => {
       const blockZone = safeStr(m?.blockZone);
-      const levels = Array.isArray(m?.levels) ? m.levels : [];
-      for (const lv of levels) {
+      (m.levels || []).forEach((lv) => {
         programme.push({
           project: projectName,
           blockZone,
@@ -104,83 +95,79 @@ function buildIndexFromState(state) {
           startDate: safeStr(lv?.startDate),
           finishDate: safeStr(lv?.finishDate),
         });
-      }
-    }
+      });
+    });
 
-    // Tracker: map responsibilityId -> supplier
-    const responsibilities = Array.isArray(p?.responsibilities)
-      ? p.responsibilities
-      : [];
-    const supplierByRespId = new Map(
-      responsibilities.map((r) => [r?.id, safeStr(r?.supplier)])
-    );
+    // Tracker rows
+    const responsibilities = Array.isArray(p.responsibilities) ? p.responsibilities : [];
+    const supplierByRespId = new Map(responsibilities.map((r) => [r.id, safeStr(r.supplier)]));
 
-    const pages = Array.isArray(p?.pages) ? p.pages : [];
-    for (const pg of pages) {
-      // Skip master pages (programme schedule lives in p.master)
-      if (pg?.meta?.isMaster) continue;
+    responsibilities.forEach((r) => {
+      const sup = safeStr(r?.supplier);
+      const resp = safeStr(r?.name || r?.code);
+      if (sup) dict.suppliers.add(sup);
+      if (resp) dict.responsibilities.add(resp);
+    });
 
-      const responsibility = safeStr(pg?.name);
-      const supplier =
-        supplierByRespId.get(pg?.meta?.responsibilityId) || "—";
+    const pages = Array.isArray(p.pages) ? p.pages : [];
+    pages
+      .filter((pg) => !pg?.meta?.isMaster)
+      .forEach((pg) => {
+        const supplier = supplierByRespId.get(pg?.meta?.responsibilityId) || "—";
+        if (supplier && supplier !== "—") dict.suppliers.add(supplier);
 
-      const pageRows = Array.isArray(pg?.rows) ? pg.rows : [];
-      for (const r of pageRows) {
-        if (!r || r.kind === "header") continue;
-        if (r.notRequired) continue;
+        const responsibility = safeStr(pg?.name);
+        if (responsibility) dict.responsibilities.add(responsibility);
 
-        // Required on site date: prefer explicit fields, fallback to anchorDateISO
-        const requiredOnSite = safeStr(
-          r.requiredOnSite || r.requiredOnSiteISO || r.anchorDateISO
-        );
+        (pg.rows || [])
+          .filter((r) => r && r.kind !== "header")
+          .forEach((r) => {
+            if (r.notRequired) return;
 
-        const daysReqToStatusA = Number(
-          r.overrideDaysReqToStatusA ?? globalReqToStatusA
-        );
-        const daysStatusAToFirstIssue = Number(
-          r.overrideDaysStatusAToFirstIssue ?? globalStatusAToFirstIssue
-        );
+            const requiredOnSite = safeStr(r.requiredOnSite || r.requiredOnSiteISO || r.anchorDateISO);
 
-        const statusA =
-          safeStr(r.statusA || r.statusAISO) ||
-          (requiredOnSite ? subDaysISO(requiredOnSite, daysReqToStatusA) : "");
+            const daysReqToStatusA = Number(r.overrideDaysReqToStatusA ?? globalReqToStatusA);
+            const daysStatusAToFirstIssue = Number(r.overrideDaysStatusAToFirstIssue ?? globalStatusAToFirstIssue);
 
-        const firstIssue =
-          safeStr(r.firstIssue || r.firstIssueISO) ||
-          (statusA ? subDaysISO(statusA, daysStatusAToFirstIssue) : "");
+            const statusA =
+              safeStr(r.statusA || r.statusAISO) ||
+              (requiredOnSite ? subDaysISO(requiredOnSite, daysReqToStatusA) : "");
 
-        rows.push({
-          project: projectName,
-          responsibility,
-          supplier,
-          item: safeStr(r.item),
-          requiredOnSite,
-          statusA,
-          firstIssue,
-          ticks: {
-            statusA: !!r.statusADone,
-            firstIssue: !!r.firstIssueDone,
-            completed: !!r.completed,
-            notRequired: !!r.notRequired,
-          },
-        });
-      }
-    }
-  }
+            const firstIssue =
+              safeStr(r.firstIssue || r.firstIssueISO) ||
+              (statusA ? subDaysISO(statusA, daysStatusAToFirstIssue) : "");
 
-  // Dictionaries for parsing
-  const dict = {
-    projects: [...new Set(rows.map((r) => r.project).filter(Boolean))].sort(),
-    suppliers: [...new Set(rows.map((r) => r.supplier).filter(Boolean))].sort(),
-    responsibilities: [
-      ...new Set(rows.map((r) => r.responsibility).filter(Boolean)),
-    ].sort(),
+            rows.push({
+              project: projectName,
+              responsibility,
+              supplier,
+              item: safeStr(r.item),
+              requiredOnSite,
+              statusA,
+              firstIssue,
+              ticks: {
+                statusA: !!r.statusADone,
+                firstIssue: !!r.firstIssueDone,
+                completed: !!r.completed,
+                notRequired: !!r.notRequired,
+              },
+            });
+          });
+      });
+  });
+
+  return {
+    programme,
+    rows,
+    dict: {
+      projects: [...dict.projects].sort((a, b) => a.localeCompare(b)),
+      suppliers: [...dict.suppliers].sort((a, b) => a.localeCompare(b)),
+      responsibilities: [...dict.responsibilities].sort((a, b) => a.localeCompare(b)),
+    },
   };
-
-  return { programme, rows, dict };
 }
 
-/* ---------------- deterministic parsing + execution ---------------- */
+/* ------------------------------ Question parsing -------------------------- */
 
 function getLastUserText(messages) {
   if (!Array.isArray(messages)) return "";
@@ -191,303 +178,291 @@ function getLastUserText(messages) {
 }
 
 function normalize(s) {
-  return safeStr(s).toLowerCase();
+  return String(s || "").toLowerCase();
 }
 
-function pickBestMatch(text, candidates) {
+function findMention(text, candidates) {
   const t = normalize(text);
-  // exact (case-insensitive) containment match
-  let best = "";
-  let bestLen = 0;
-  for (const c of candidates) {
-    const cn = normalize(c);
-    if (!cn) continue;
-    // whole-word-ish match
-    const re = new RegExp(`\\b${escapeRegExp(cn)}\\b`, "i");
-    if (re.test(t) && cn.length > bestLen) {
-      best = c;
-      bestLen = cn.length;
-    }
+  const sorted = [...candidates].sort((a, b) => b.length - a.length);
+  for (const c of sorted) {
+    const cNorm = normalize(c);
+    if (!cNorm) continue;
+    if (cNorm.length >= 2 && t.includes(cNorm)) return c;
   }
-  return best || "";
+  return "";
 }
 
-function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function todayISOFromContext(ctx) {
-  const iso = safeStr(ctx?.today);
-  if (iso && isoToDate(iso)) return iso;
-  // UTC date is fine for deterministic comparisons; UI already sends "today" typically.
-  return new Date().toISOString().slice(0, 10);
-}
-
-function isOverdue(row, todayISO) {
-  if (row?.ticks?.completed || row?.ticks?.notRequired) return false;
-
-  // Prefer statusA if present and not done
-  if (row.statusA && isoToDate(row.statusA) && !row?.ticks?.statusA) {
-    return isoToDate(row.statusA) < isoToDate(todayISO);
-  }
-  // Fallback: requiredOnSite
-  if (row.requiredOnSite && isoToDate(row.requiredOnSite)) {
-    return isoToDate(row.requiredOnSite) < isoToDate(todayISO);
-  }
-  return false;
+function parseLimit(text, fallback) {
+  const t = String(text || "");
+  const m = t.match(/\blimit\s*=\s*(\d+)\b/i) || t.match(/\btop\s+(\d+)\b/i);
+  if (!m) return fallback;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 200) : fallback;
 }
 
 function monthKeyFromText(text, defaultYear) {
   const t = normalize(text);
   const months = {
-    jan: 1,
-    january: 1,
-    feb: 2,
-    february: 2,
-    mar: 3,
-    march: 3,
-    apr: 4,
-    april: 4,
-    may: 5,
-    jun: 6,
-    june: 6,
-    jul: 7,
-    july: 7,
-    aug: 8,
-    august: 8,
-    sep: 9,
-    sept: 9,
-    september: 9,
-    oct: 10,
-    october: 10,
-    nov: 11,
-    november: 11,
-    dec: 12,
-    december: 12,
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+    may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9,
+    september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
   };
-  let monthNum = null;
-  for (const k of Object.keys(months)) {
-    const re = new RegExp(`\\b${k}\\b`, "i");
-    if (re.test(t)) {
-      monthNum = months[k];
-      break;
-    }
-  }
-  if (!monthNum) return null;
+  const monthWord = Object.keys(months).find((k) => new RegExp(`\\b${k}\\b`).test(t));
+  if (!monthWord) return null;
 
   const yearMatch = t.match(/\b(20\d{2})\b/);
   const year = yearMatch ? Number(yearMatch[1]) : Number(defaultYear);
-  const mm = String(monthNum).padStart(2, "0");
+  const mm = String(months[monthWord]).padStart(2, "0");
   return `${year}-${mm}`;
 }
 
 function startEndOfMonth(monthKey) {
   const [yS, mS] = String(monthKey).split("-");
-  const y = Number(yS);
-  const m = Number(mS);
+  const y = Number(yS), m = Number(mS);
   const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
   const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
   return { start, end };
 }
 
 function overlapsMonth(startDate, finishDate, monthStart, monthEnd) {
-  const s = isoToDate(startDate);
-  const f = isoToDate(finishDate);
-  const ms = isoToDate(monthStart);
-  const me = isoToDate(monthEnd);
+  const s = isoToDate(startDate), f = isoToDate(finishDate);
+  const ms = isoToDate(monthStart), me = isoToDate(monthEnd);
   if (!s || !f || !ms || !me) return false;
   return s <= me && f >= ms;
 }
 
-function formatListLines(lines) {
-  if (!lines.length) return "";
-  return `• ${lines.join("\n• ")}`;
+function isOverdue(row, todayISO) {
+  if (row.ticks?.completed || row.ticks?.notRequired) return false;
+
+  if (row.statusA && isoToDate(row.statusA) && !row.ticks?.statusA) {
+    return isoToDate(row.statusA) < isoToDate(todayISO);
+  }
+  if (row.requiredOnSite && isoToDate(row.requiredOnSite)) {
+    return isoToDate(row.requiredOnSite) < isoToDate(todayISO);
+  }
+  return false;
 }
 
-function handleDeterministic(question, index, uiContext) {
-  const q = safeStr(question);
-  const ql = q.toLowerCase();
-  const todayISO = todayISOFromContext(uiContext);
+function isLikelyFollowUp(text) {
+  const t = normalize(text);
+  return /\b(only|just|what about|and|instead|filter|show me|those|them|in)\b/.test(t);
+}
 
-  // Default project from context if present
-  const defaultProject = safeStr(uiContext?.activeProject?.name);
-  const projectFromText = pickBestMatch(q, index.dict.projects);
-  const project = projectFromText || defaultProject;
+/**
+ * queryState shape returned to client:
+ * {
+ *  v: 2,
+ *  intent: string,
+ *  dataset: "tracker"|"programme",
+ *  filters: { project?: string, supplier?: string, overdue?: boolean },
+ *  params: { monthKey?: string, limit?: number, dateField?: string }
+ * }
+ */
 
-  // Supplier filter from text if present
-  const supplierFromText = pickBestMatch(q, index.dict.suppliers);
-  const supplier = supplierFromText;
+function parseNewQuestion(question, dict, uiContext) {
+  const q = String(question || "").trim();
+  const ql = normalize(q);
 
-  // --- Programme month queries ---
-  if (/\b(on\s*site|onsite|programme)\b/i.test(q)) {
+  const todayISO = safeStr(uiContext?.today) || new Date().toISOString().slice(0, 10);
+  const activeProject = safeStr(uiContext?.activeProject?.name);
+
+  const projectMention = findMention(q, dict.projects) || activeProject;
+  const supplierMention = findMention(q, dict.suppliers);
+
+  const limit = parseLimit(q, 25);
+
+  // Programme
+  if (/\b(on\s*site|onsite|programme|master)\b/.test(ql)) {
     const mk = monthKeyFromText(q, todayISO.slice(0, 4));
     if (mk) {
-      const { start, end } = startEndOfMonth(mk);
-      const scoped = project
-        ? index.programme.filter(
-            (p) => normalize(p.project) === normalize(project)
-          )
-        : index.programme;
-
-      const matched = scoped.filter((p) =>
-        overlapsMonth(p.startDate, p.finishDate, start, end)
-      );
-
-      const lines = matched.slice(0, 80).map(
-        (p) =>
-          `${p.project} — ${p.blockZone} — ${p.level} | ${p.startDate} → ${p.finishDate}`
-      );
-
       return {
-        answer: matched.length
-          ? `On site in ${mk}${project ? ` for ${project}` : ""}:\n${formatListLines(lines)}`
-          : `No programme items found on site in ${mk}${project ? ` for ${project}` : ""}.`,
-        data: {
-          intent: "programme_month",
-          monthKey: mk,
-          project: project || null,
-          count: matched.length,
-          rows: matched.slice(0, 80),
-        },
+        v: 2,
+        intent: "programme_month",
+        dataset: "programme",
+        filters: { project: projectMention || "" },
+        params: { monthKey: mk, limit: 80 },
       };
     }
   }
 
-  // Prepare tracker scope
-  let tracker = index.rows;
-
-  if (project) {
-    tracker = tracker.filter((r) => normalize(r.project) === normalize(project));
+  // Tracker intents
+  if (ql.includes("supplier") && (ql.includes("most") || ql.includes("top")) && ql.includes("overdue")) {
+    return {
+      v: 2,
+      intent: "group_count_supplier_overdue",
+      dataset: "tracker",
+      filters: { project: projectMention || "", overdue: true },
+      params: { limit: 20 },
+    };
   }
-  if (supplier) {
-    tracker = tracker.filter(
-      (r) => normalize(r.supplier) === normalize(supplier)
-    );
+
+  if (ql.includes("overdue") && (ql.includes("next") || ql.includes("soonest") || ql.includes("upcoming"))) {
+    return {
+      v: 2,
+      intent: "next_overdue",
+      dataset: "tracker",
+      filters: { project: projectMention || "", supplier: supplierMention || "", overdue: true },
+      params: { dateField: "requiredOnSite", limit },
+    };
   }
 
-  // --- Supplier has most overdue ---
-  if (
-    ql.includes("supplier") &&
-    (ql.includes("most") || ql.includes("top")) &&
-    ql.includes("overdue")
-  ) {
-    const overdue = tracker.filter((r) => isOverdue(r, todayISO));
+  if ((ql.includes("status a") || ql.includes("statusa")) && (ql.includes("next") || ql.includes("upcoming"))) {
+    return {
+      v: 2,
+      intent: "next_statusA",
+      dataset: "tracker",
+      filters: { project: projectMention || "", supplier: supplierMention || "" },
+      params: { dateField: "statusA", limit },
+    };
+  }
+
+  if (ql.includes("how many") || ql.startsWith("count") || ql.includes("count")) {
+    const overdue = ql.includes("overdue") ? true : undefined;
+    return {
+      v: 2,
+      intent: "count_items",
+      dataset: "tracker",
+      filters: {
+        project: projectMention || "",
+        supplier: supplierMention || "",
+        ...(overdue !== undefined ? { overdue } : {}),
+      },
+      params: {},
+    };
+  }
+
+  return { v: 2, intent: "help", dataset: "tracker", filters: { project: projectMention || "" }, params: {} };
+}
+
+function applyFollowUp(prev, question, dict, uiContext) {
+  const q = String(question || "").trim();
+  const ql = normalize(q);
+
+  const next = JSON.parse(JSON.stringify(prev || {}));
+  next.v = 2;
+
+  const activeProject = safeStr(uiContext?.activeProject?.name);
+  const projectMention = findMention(q, dict.projects) || "";
+  const supplierMention = findMention(q, dict.suppliers) || "";
+
+  next.filters = { ...(next.filters || {}) };
+  next.params = { ...(next.params || {}) };
+
+  if (projectMention) next.filters.project = projectMention;
+  else if (activeProject && !next.filters.project) next.filters.project = activeProject;
+
+  if (supplierMention) next.filters.supplier = supplierMention;
+
+  const lim = parseLimit(q, null);
+  if (lim !== null) next.params.limit = lim;
+
+  const todayISO = safeStr(uiContext?.today) || new Date().toISOString().slice(0, 10);
+  const mk = monthKeyFromText(q, todayISO.slice(0, 4));
+  if (mk && next.intent === "programme_month") next.params.monthKey = mk;
+
+  // Explicit switches
+  if (ql.includes("overdue")) next.filters.overdue = true;
+  if (ql.includes("show") && (ql.includes("items") || ql.includes("those"))) {
+    if (next.intent === "group_count_supplier_overdue") next.intent = "next_overdue";
+  }
+
+  return next;
+}
+
+/* ------------------------------ Execution -------------------------------- */
+
+function execute(plan, index, uiContext) {
+  const todayISO = safeStr(uiContext?.today) || new Date().toISOString().slice(0, 10);
+  const filters = plan?.filters || {};
+  const params = plan?.params || {};
+
+  if (plan.intent === "programme_month") {
+    const mk = params.monthKey;
+    if (!mk) return { answer: "Please specify a month (e.g. February 2026).", data: { intent: plan.intent } };
+
+    const { start, end } = startEndOfMonth(mk);
+    const scoped = filters.project
+      ? index.programme.filter((p) => normalize(p.project) === normalize(filters.project))
+      : index.programme;
+
+    const matches = scoped.filter((p) => overlapsMonth(p.startDate, p.finishDate, start, end));
+    const outRows = matches.slice(0, params.limit || 80);
+    const out = outRows.map((p) => `${p.project} — ${p.blockZone} — ${p.level} | ${p.startDate} → ${p.finishDate}`);
+
+    return {
+      answer: out.length
+        ? `On site in ${mk}${filters.project ? ` for ${filters.project}` : ""}:
+• ${out.join("\n• ")}`
+        : `No programme items found on site in ${mk}${filters.project ? ` for ${filters.project}` : ""}.`,
+      data: { intent: plan.intent, monthKey: mk, count: matches.length, rows: outRows },
+    };
+  }
+
+  // Tracker scope
+  let rows = index.rows;
+  if (filters.project) rows = rows.filter((r) => normalize(r.project) === normalize(filters.project));
+  if (filters.supplier) rows = rows.filter((r) => normalize(r.supplier) === normalize(filters.supplier));
+
+  if (plan.intent === "group_count_supplier_overdue") {
+    const overdue = rows.filter((r) => isOverdue(r, todayISO));
     const counts = new Map();
-    for (const r of overdue) {
-      counts.set(r.supplier, (counts.get(r.supplier) || 0) + 1);
-    }
-    const ranked = [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 20);
+    overdue.forEach((r) => counts.set(r.supplier, (counts.get(r.supplier) || 0) + 1));
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, params.limit || 20);
 
-    if (!ranked.length) {
-      return {
-        answer: `No overdue items found${project ? ` in ${project}` : ""}.`,
-        data: { intent: "group_count_supplier_overdue", project: project || null },
-      };
-    }
+    if (!ranked.length) return { answer: `No overdue items found${filters.project ? ` in ${filters.project}` : ""}.`, data: { intent: plan.intent } };
 
     const [topSupplier, topCount] = ranked[0];
-    const lines = ranked.map(([s, c]) => `${s}: ${c}`);
     return {
       answer:
-        `Supplier with the most overdue items${project ? ` in ${project}` : ""}: ${topSupplier} (${topCount}).\n` +
-        `Top suppliers:\n${formatListLines(lines)}`,
-      data: {
-        intent: "group_count_supplier_overdue",
-        project: project || null,
-        ranked: ranked.map(([s, c]) => ({ supplier: s, count: c })),
-      },
+        `Supplier with the most overdue items${filters.project ? ` in ${filters.project}` : ""}: ${topSupplier} (${topCount}).\n` +
+        `Top suppliers:\n• ${ranked.map(([s, c]) => `${s}: ${c}`).join("\n• ")}`,
+      data: { intent: plan.intent, ranked: ranked.map(([supplier, count]) => ({ supplier, count })) },
     };
   }
 
-  // --- Overdue next ---
-  if (
-    ql.includes("overdue") &&
-    (ql.includes("next") || ql.includes("soonest") || ql.includes("upcoming"))
-  ) {
-    const overdue = tracker.filter((r) => isOverdue(r, todayISO));
-    overdue.sort((a, b) =>
-      safeStr(a.requiredOnSite).localeCompare(safeStr(b.requiredOnSite))
-    );
-
-    const out = overdue.slice(0, 25).map(
-      (r) =>
-        `${r.project} — ${r.supplier} — ${r.item} | required on site: ${r.requiredOnSite} | status A: ${r.statusA}`
-    );
+  if (plan.intent === "next_overdue") {
+    let scoped = rows;
+    if (filters.overdue) scoped = scoped.filter((r) => isOverdue(r, todayISO));
+    scoped.sort((a, b) => (a.requiredOnSite || "").localeCompare(b.requiredOnSite || ""));
+    const outRows = scoped.slice(0, params.limit || 25);
+    const out = outRows.map((r) => `${r.project} — ${r.supplier} — ${r.item} | required on site: ${r.requiredOnSite} | status A: ${r.statusA}`);
 
     return {
       answer: out.length
-        ? `Overdue next${project ? ` in ${project}` : ""}:\n${formatListLines(out)}`
-        : `No overdue items found${project ? ` in ${project}` : ""}.`,
-      data: {
-        intent: "next_overdue",
-        project: project || null,
-        supplier: supplier || null,
-        totalOverdue: overdue.length,
-        rows: overdue.slice(0, 25),
-      },
+        ? `Overdue next${filters.project ? ` in ${filters.project}` : ""}${filters.supplier ? ` (${filters.supplier})` : ""}:\n• ${out.join("\n• ")}`
+        : `No overdue items found${filters.project ? ` in ${filters.project}` : ""}.`,
+      data: { intent: plan.intent, count: scoped.length, rows: outRows },
     };
   }
 
-  // --- Next Status A dates ---
-  if (
-    (ql.includes("status a") || ql.includes("statusa")) &&
-    (ql.includes("next") || ql.includes("upcoming"))
-  ) {
-    const pending = tracker.filter((r) => r.statusA && !r?.ticks?.statusA);
-    pending.sort((a, b) => safeStr(a.statusA).localeCompare(safeStr(b.statusA)));
-
-    const out = pending.slice(0, 25).map(
-      (r) => `${r.statusA} — ${r.supplier} — ${r.item}`
-    );
+  if (plan.intent === "next_statusA") {
+    const pending = rows.filter((r) => r.statusA && !r.ticks?.statusA);
+    pending.sort((a, b) => (a.statusA || "").localeCompare(b.statusA || ""));
+    const outRows = pending.slice(0, params.limit || 25);
+    const out = outRows.map((r) => `${r.statusA} — ${r.supplier} — ${r.item}`);
 
     return {
       answer: out.length
-        ? `Next Status A dates${project ? ` in ${project}` : ""}:\n${formatListLines(out)}`
-        : `No upcoming Status A dates found${project ? ` in ${project}` : ""}.`,
-      data: {
-        intent: "next_statusA",
-        project: project || null,
-        supplier: supplier || null,
-        count: pending.length,
-        rows: pending.slice(0, 25),
-      },
+        ? `Next Status A dates${filters.project ? ` in ${filters.project}` : ""}${filters.supplier ? ` (${filters.supplier})` : ""}:\n• ${out.join("\n• ")}`
+        : `No upcoming Status A dates found${filters.project ? ` in ${filters.project}` : ""}.`,
+      data: { intent: plan.intent, count: pending.length, rows: outRows },
     };
   }
 
-  // --- Count overdue (explicit or implied) ---
-  if (ql.includes("how many") || ql.includes("count")) {
-    const wantOverdue = ql.includes("overdue");
-    if (wantOverdue) {
-      const overdue = tracker.filter((r) => isOverdue(r, todayISO));
-      return {
-        answer: `Overdue count${project ? ` in ${project}` : ""}${
-          supplier ? ` for ${supplier}` : ""
-        }: ${overdue.length}.`,
-        data: {
-          intent: "count_overdue",
-          project: project || null,
-          supplier: supplier || null,
-          count: overdue.length,
-        },
-      };
-    }
-    // total count
+  if (plan.intent === "count_items") {
+    let scoped = rows;
+    if (filters.overdue === true) scoped = scoped.filter((r) => isOverdue(r, todayISO));
+    const n = scoped.length;
+
     return {
-      answer: `Row count${project ? ` in ${project}` : ""}${
-        supplier ? ` for ${supplier}` : ""
-      }: ${tracker.length}.`,
-      data: {
-        intent: "count_rows",
-        project: project || null,
-        supplier: supplier || null,
-        count: tracker.length,
-      },
+      answer:
+        `Count${filters.overdue ? " (overdue)" : ""}` +
+        `${filters.project ? ` in ${filters.project}` : ""}` +
+        `${filters.supplier ? ` for ${filters.supplier}` : ""}: ${n}.`,
+      data: { intent: plan.intent, count: n },
     };
   }
 
-  // Deterministic help fallback
   return {
     answer:
       `I can answer programme + tracker questions deterministically.\n` +
@@ -495,13 +470,18 @@ function handleDeterministic(question, index, uiContext) {
       `• What is overdue next?\n` +
       `• Which supplier has the most overdue items?\n` +
       `• What are the next Status A dates?\n` +
-      `• How many overdue items are there?\n` +
-      `• What is on site in February 2026?`,
+      `• Count overdue items\n` +
+      `• What is on site in February 2026?\n\n` +
+      `Follow-ups you can ask:\n` +
+      `• Only in Holloway\n` +
+      `• Just Keyfix\n` +
+      `• Top 10\n` +
+      `• What about March 2026`,
     data: { intent: "help" },
   };
 }
 
-/* ---------------- Azure Function ---------------- */
+/* ------------------------------ Azure Function ---------------------------- */
 
 app.http("chat", {
   methods: ["POST"],
@@ -510,19 +490,29 @@ app.http("chat", {
     try {
       const body = await req.json().catch(() => ({}));
       const question = getLastUserText(body?.messages);
+      const uiContext = body?.context || {};
 
-      // Always read from blob (authoritative source) to avoid relying on huge UI context.
       const state = await loadStateJson();
       const index = buildIndexFromState(state);
 
-      const result = handleDeterministic(question, index, body?.context || {});
-      // Keep UI compatibility: return { answer }. Include deterministic data for debugging/future UI.
-      return { status: 200, jsonBody: { answer: result.answer, data: result.data } };
-    } catch (e) {
+      const incoming = body?.queryState;
+      const plan =
+        incoming && isLikelyFollowUp(question)
+          ? applyFollowUp(incoming, question, index.dict, uiContext)
+          : parseNewQuestion(question, index.dict, uiContext);
+
+      const result = execute(plan, index, uiContext);
+
       return {
-        status: 500,
-        jsonBody: { error: "deterministic chat error", details: String(e?.message || e) },
+        status: 200,
+        jsonBody: {
+          answer: result.answer,
+          data: result.data,
+          queryState: plan,
+        },
       };
+    } catch (err) {
+      return { status: 500, jsonBody: { error: err?.message || String(err) } };
     }
   },
 });
