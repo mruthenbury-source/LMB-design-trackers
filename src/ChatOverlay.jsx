@@ -459,7 +459,7 @@ function buildQuickPrompt() {
     </button>
   </div>
           </div>
-        </div
+        </div>
           </div>
   );
 }
