@@ -64,8 +64,13 @@ const projectOptions = useMemo(() => {
     .map((s) => String(s).trim())
     .filter(Boolean);
 
+      .concat(Array.isArray(metaProjects) ? metaProjects : [])
+    .filter(Boolean)
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+
   return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-}, [props.projects, chatContext]);
+}, [props.projects, chatContext, metaProjects]);
 
 
   const sendChat =
@@ -79,6 +84,25 @@ const projectOptions = useMemo(() => {
   // --- Quick question UI ---
   const [quickId, setQuickId] = useState("");
   const [quickParams, setQuickParams] = useState({ project: "", dateFrom: "", dateTo: "", asOfDate: "" });
+const [metaProjects, setMetaProjects] = useState([]);
+const [metaLoaded, setMetaLoaded] = useState(false);
+
+useEffect(() => {
+  // Pull projects deterministically from /api/meta (optional helper). This keeps the dropdown populated
+  // even when chatContext/props don't include the project list.
+  if (metaLoaded) return;
+  (async () => {
+    try {
+      const res = await fetch("/api/meta");
+      const j = await res.json();
+      if (j && j.ok && Array.isArray(j.projects)) setMetaProjects(j.projects);
+    } catch {
+      // ignore: dropdown will fall back to any projects present in props/chatContext
+    } finally {
+      setMetaLoaded(true);
+    }
+  })();
+}, [metaLoaded]);
 const listRef = useRef(null);
 
   useEffect(() => {
@@ -297,7 +321,7 @@ const listRef = useRef(null);
             onChange={(e) => setQuickParams((s) => ({ ...s, project: e.target.value }))}
             style={styles.select}
           >
-            <option value="">{projectOptions.length ? "Select project…" : "No projects loaded"}</option>
+            <option value="">{projectOptions.length ? "Select project…" : (metaLoaded ? "No projects found" : "Loading projects…")}</option>
             {projectOptions.map((p) => (
               <option key={p} value={p}>
                 {p}
@@ -437,6 +461,7 @@ const styles = {
   checkboxLabel: { fontSize: 11, color: "#111827" },
 
   smallBtn: {
+    flexShrink: 0,
     fontSize: 11,
     padding: "4px 8px",
     borderRadius: 8,
@@ -484,9 +509,10 @@ const styles = {
   },
 
   quickWrap: { display: "flex", flexDirection: "column", gap: 8 },
-  quickRow: { display: "flex", gap: 8, alignItems: "center" },
+  quickRow: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
   select: {
-    flex: 1,
+    flex: "1 1 260px",
+    minWidth: 220,
     border: "1px solid #e5e7eb",
     borderRadius: 8,
     padding: "6px 8px",
