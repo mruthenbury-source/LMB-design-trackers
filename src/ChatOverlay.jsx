@@ -58,18 +58,16 @@ export default function ChatOverlay(props) {
 
   // --- Quick question UI ---
   const [quickId, setQuickId] = useState("");
-  const [quickProject, setQuickProject] = useState("");
-  const [quickDateFrom, setQuickDateFrom] = useState("");
-  const [quickDateTo, setQuickDateTo] = useState("");
-  const [quickAsOfDate, setQuickAsOfDate] = useState("");
+const [quickProject, setQuickProject] = useState("");
+const [quickOnSite, setQuickOnSite] = useState(""); // kept for backward compatibility (unused by templates)
+const [quickDateFrom, setQuickDateFrom] = useState("");
+const [quickDateTo, setQuickDateTo] = useState("");
+const [quickAsOfDate, setQuickAsOfDate] = useState("");
 
-  const [metaProjects, setMetaProjects] = useState([]);
-  const [metaLoaded, setMetaLoaded] = useState(false);
-const listRef = useRef(null);
-
+const [metaProjects, setMetaProjects] = useState([]);
+const [metaLoaded, setMetaLoaded] = useState(false);
 
 useEffect(() => {
-  // Pull projects deterministically from /api/meta if not available via props/chatContext.
   if (metaLoaded) return;
   (async () => {
     try {
@@ -83,6 +81,8 @@ useEffect(() => {
     }
   })();
 }, [metaLoaded]);
+
+  const listRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
@@ -99,79 +99,84 @@ useEffect(() => {
           chatContext.programmeData ||
           chatContext.programmeIndex ||
           chatContext.programmeRows));
-
-const projectOptions = useMemo(() => {
-  const ctx = chatContext || {};
-  const fromProps = Array.isArray(props.projects) ? props.projects : [];
-  const fromState = Array.isArray(ctx?.state?.projects) ? ctx.state.projects : [];
-  const fromCtxProjects = Array.isArray(ctx?.projects) ? ctx.projects : [];
-  const fromMeta = Array.isArray(metaProjects) ? metaProjects : [];
-
-  const names = []
-    .concat(fromProps)
-    .concat(fromState)
-    .concat(fromCtxProjects)
-    .concat(fromMeta)
-    .map((p) => (typeof p === "string" ? p : p?.name))
-    .filter(Boolean)
-    .map((s) => String(s).trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-}, [props.projects, chatContext, metaProjects]);
-
     return hasProgramme
       ? "Use PROGRAMME data (not tracker rows) for on-site level questions. If programme data is missing, say so."
       : "Programme data may be missing—if so, say you cannot answer accurately.";
   }, [chatContext, programmeData]);
 
-  const quickTemplates = useMemo(
+const quickTemplates = useMemo(
   () => [
-    { id: "overdue_first_issue_all", label: "Overdue items for first issue (all projects)", params: [] },
-    { id: "overdue_first_issue_project", label: "Overdue items for first issue (specific project)", params: [{ key: "project", type: "project" }] },
+    { id: "overdue_first_issue_all", label: "Overdue items for first issue on all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "overdue_first_issue_project", label: "Overdue items for first issue on a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
 
-    { id: "overdue_statusA_all", label: "Overdue items for Status A approval (all projects)", params: [] },
-    { id: "overdue_statusA_project", label: "Overdue items for Status A approval (specific project)", params: [{ key: "project", type: "project" }] },
+    { id: "overdue_statusA_all", label: "Overdue items for Status A approval (all projects)", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "overdue_statusA_project", label: "Overdue items for Status A approval on a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
 
-    { id: "statusA_approved_all", label: "Which items have Status A approval (all projects)", params: [] },
-    { id: "statusA_approved_project", label: "Which items have Status A approval (specific project)", params: [{ key: "project", type: "project" }] },
+    { id: "statusA_approved_all", label: "Which items have Status A approval for all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "statusA_approved_project", label: "Which items have Status A approval for a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
 
-    { id: "done_all", label: "Which items are marked as done (all projects)", params: [] },
-    { id: "done_project", label: "Which items are marked as done (specific project)", params: [{ key: "project", type: "project" }] },
+    { id: "done_all", label: "Which items are marked as done for all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "done_project", label: "Which items are marked as done for a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
 
-    { id: "programme_range_all", label: "Construction programme on site during date range (all projects)", params: [{ key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }] },
-    { id: "programme_range_project", label: "Construction programme on site during date range (specific project)", params: [{ key: "project", type: "project" }, { key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }] },
+    { id: "programme_range_all", label: "Construction programme for ALL projects on site during (date range)", needsProject: false, needsDateRange: true, needsAsOf: false },
+    { id: "programme_range_project", label: "Construction programme for a specific project on site during (date range)", needsProject: true, needsDateRange: true, needsAsOf: false },
 
-    { id: "compare_programme_all", label: "Compare construction programmes: as-of date vs current (all projects)", params: [{ key: "asOfDate", type: "date" }] },
-    { id: "compare_programme_project", label: "Compare construction programmes: as-of date vs current (specific project)", params: [{ key: "project", type: "project" }, { key: "asOfDate", type: "date" }] },
+    { id: "compare_programme_all", label: "Compare construction programmes for ALL projects (as-of date vs current)", needsProject: false, needsDateRange: false, needsAsOf: true },
+    { id: "compare_programme_project", label: "Compare construction programme for a specific project (as-of date vs current)", needsProject: true, needsDateRange: false, needsAsOf: true },
 
-    { id: "comments_all", label: "Return all comments (all projects)", params: [] },
-    { id: "comments_project", label: "Return comments (specific project)", params: [{ key: "project", type: "project" }] },
+    { id: "comments_all", label: "Return all comments for all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "comments_project", label: "Return comments for a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
   ],
   []
 );
 
-  const selectedQuick = useMemo(() => quickTemplates.find((q) => q.id === quickId) || null, [quickTemplates, quickId]);
+const projectOptions = useMemo(() => {
+  const ctx = chatContext || {};
+  const fromCtxState = Array.isArray(ctx?.state?.projects) ? ctx.state.projects : [];
+  const fromCtxProjects = Array.isArray(ctx?.projects) ? ctx.projects : [];
+  const fromProps = Array.isArray(props.projects) ? props.projects : [];
+  const names = []
+    .concat(fromProps)
+    .concat(fromCtxState)
+    .concat(fromCtxProjects)
+    .concat(Array.isArray(metaProjects) ? metaProjects : [])
+    .map((p) => (typeof p === "string" ? p : p?.name))
+    .filter(Boolean)
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+}, [props.projects, chatContext, metaProjects]);
+  const selectedQuick = useMemo(
+    () => quickTemplates.find((q) => q.id === quickId) || null,
+    [quickId, quickTemplates]
+  );
 
-  function buildQuickPrompt() {
+function buildQuickPrompt() {
   const q = quickTemplates.find((x) => x.id === quickId);
   if (!q) return "";
 
   const params = {};
-  for (const p of q.params || []) {
-    if (p.type === "project") params.project = (quickProject || "").trim();
-    if (p.type === "date" && p.key === "dateFrom") params.dateFrom = (quickDateFrom || "").trim();
-    if (p.type === "date" && p.key === "dateTo") params.dateTo = (quickDateTo || "").trim();
-    if (p.type === "date" && p.key === "asOfDate") params.asOfDate = (quickAsOfDate || "").trim();
+
+  if (q.needsProject) {
+    const p = String(quickProject || "").trim();
+    if (!p) return "";
+    params.project = p;
   }
 
-  // Require any needed params
-  for (const p of q.params || []) {
-    if (p.type === "project" && !params.project) return "";
-    if (p.type === "date" && !params[p.key]) return "";
+  if (q.needsDateRange) {
+    const from = String(quickDateFrom || "").trim();
+    const to = String(quickDateTo || "").trim();
+    if (!from || !to) return "";
+    params.dateFrom = from;
+    params.dateTo = to;
   }
 
-  // Deterministic marker parsed by backend:
+  if (q.needsAsOf) {
+    const asOf = String(quickAsOfDate || "").trim();
+    if (!asOf) return "";
+    params.asOfDate = asOf;
+  }
+
   return `TEMPLATE:${q.id}\nPARAMS:${JSON.stringify(params)}`;
 }
 
@@ -267,7 +272,7 @@ const projectOptions = useMemo(() => {
           {/* Quick questions */}
           <div style={styles.quickWrap}>
             <div style={styles.quickRow}>
-              <select value={quickId} onChange={(e) => { setQuickId(e.target.value); setQuickProject(""); setQuickDateFrom(""); setQuickDateTo(""); setQuickAsOfDate(""); }} style={styles.select}>
+                onChange={(e) => { setQuickId(e.target.value); setQuickProject(""); setQuickDateFrom(""); setQuickDateTo(""); setQuickAsOfDate(""); }}
                 <option value="">Quick questions…</option>
                 {quickTemplates.map((q) => (
                   <option key={q.id} value={q.id}>
@@ -295,47 +300,64 @@ const projectOptions = useMemo(() => {
               </button>
             </div>
 
-            
-{(selectedQuick?.params?.length > 0) && (
+{(selectedQuick?.needsProject || selectedQuick?.needsDateRange || selectedQuick?.needsAsOf) && (
   <div style={styles.quickRow}>
-    {selectedQuick.params.some((p) => p.type === "project") && (
-      <select value={quickProject} onChange={(e) => setQuickProject(e.target.value)} style={styles.select}>
-        <option value="">
-          {projectOptions.length ? "Select project…" : metaLoaded ? "No projects found" : "Loading projects…"}
-        </option>
-        {projectOptions.map((p) => (
-          <option key={p} value={p}>
-            {p}
-          </option>
-        ))}
-      </select>
+    {selectedQuick?.needsProject && (
+      <>
+        {projectOptions.length ? (
+          <select
+            value={quickProject}
+            onChange={(e) => setQuickProject(e.target.value)}
+            style={styles.select}
+          >
+            <option value="">{metaLoaded ? "Select project…" : "Loading projects…"}</option>
+            {projectOptions.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            value={quickProject}
+            onChange={(e) => setQuickProject(e.target.value)}
+            placeholder={metaLoaded ? "Project name…" : "Loading projects…"}
+            style={styles.input}
+          />
+        )}
+      </>
     )}
 
-    {selectedQuick.params.some((p) => p.key === "dateFrom") && (
-      <input type="date" value={quickDateFrom} onChange={(e) => setQuickDateFrom(e.target.value)} style={styles.input} />
+    {selectedQuick?.needsDateRange && (
+      <>
+        <input
+          type="date"
+          value={quickDateFrom}
+          onChange={(e) => setQuickDateFrom(e.target.value)}
+          style={styles.input}
+          title="From"
+        />
+        <input
+          type="date"
+          value={quickDateTo}
+          onChange={(e) => setQuickDateTo(e.target.value)}
+          style={styles.input}
+          title="To"
+        />
+      </>
     )}
-    {selectedQuick.params.some((p) => p.key === "dateTo") && (
-      <input type="date" value={quickDateTo} onChange={(e) => setQuickDateTo(e.target.value)} style={styles.input} />
-    )}
-    {selectedQuick.params.some((p) => p.key === "asOfDate") && (
-      <input type="date" value={quickAsOfDate} onChange={(e) => setQuickAsOfDate(e.target.value)} style={styles.input} />
+
+    {selectedQuick?.needsAsOf && (
+      <input
+        type="date"
+        value={quickAsOfDate}
+        onChange={(e) => setQuickAsOfDate(e.target.value)}
+        style={styles.input}
+        title="As-of date (uses backups)"
+      />
     )}
   </div>
 )}
-placeholder="Project name…"
-                    style={styles.input}
-                  />
-                )}
-                {selectedQuick?.needsOnSite && (
-                  <input
-                    value={quickOnSite}
-                    onChange={(e) => setQuickOnSite(e.target.value)}
-                    placeholder="Month / date / range…"
-                    style={styles.input}
-                  />
-                )}
-              </div>
-            )}
           </div>
 
 {/* FREE QUERY BOX (always visible, below quick questions) */}
@@ -440,7 +462,7 @@ const styles = {
   checkbox: { width: 12, height: 12 },
   checkboxLabel: { fontSize: 11, color: "#111827" },
 
-  smallBtn: {
+  smallBtn: { flexShrink: 0,
     fontSize: 11,
     padding: "4px 8px",
     borderRadius: 8,
