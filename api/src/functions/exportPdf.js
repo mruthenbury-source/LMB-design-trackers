@@ -115,111 +115,143 @@ app.http("exportPdf", {
         doc.moveDown(0.8);
       }
 
-      // ---- Answer ----
-      doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Answer");
-      doc.moveDown(0.5);
-      doc.font("Helvetica").fontSize(10).fillColor("#111827");
+      
+// ---- TABLE (page 1) ----
+if (rows.length) {
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Data");
+  doc.moveDown(0.5);
 
-      const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-      doc.text(answer, { width: pageW });
+  const pageW2 = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const L = doc.page.margins.left;
 
-      // ---- Table ----
-      if (rows.length) {
-        addPageWithChrome();
+  // Explicit widths; Item fills remainder
+  const fixed = [
+    { key: "project", label: "Project", w: 85 },
+    { key: "supplier", label: "Supplier", w: 70 },
+    { key: "responsibility", label: "Resp", w: 80 },
+    { key: "requiredOnSite", label: "Req", w: 55 },
+    { key: "statusA", label: "A", w: 55 },
+  ];
+  const used = fixed.reduce((a, c) => a + c.w, 0);
+  const itemW = Math.max(160, pageW2 - used);
 
-        const pageW2 = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const cols = [
+    fixed[0],
+    fixed[1],
+    fixed[2],
+    { key: "item", label: "Item", w: itemW },
+    fixed[3],
+    fixed[4],
+  ];
 
-        // Column widths (easy to tweak)
-        const baseCols = [
-          { key: "project", label: "Project", w: 85 },
-          { key: "supplier", label: "Supplier", w: 70 },
-          { key: "responsibility", label: "Resp", w: 80 },
-          { key: "requiredOnSite", label: "Req", w: 55 },
-          { key: "statusA", label: "A", w: 55 },
-        ];
-        const used = baseCols.reduce((a, c) => a + c.w, 0);
-        const itemW = Math.max(160, pageW2 - used);
+  const rowH = 16;
+  const totalW = cols.reduce((a, c) => a + c.w, 0);
 
-        const cols = [
-          baseCols[0],
-          baseCols[1],
-          baseCols[2],
-          { key: "item", label: "Item", w: itemW },
-          baseCols[3],
-          baseCols[4],
-        ];
+  const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 60;
 
-        const startX = doc.page.margins.left;
-        let y = doc.y;
-        const rowH = 16;
-        const totalW = cols.reduce((a, c) => a + c.w, 0);
+  const addPageWithChrome = () => {
+    doc.addPage();
+    pageNo += 1;
+    drawChrome(doc, title, logo, pageNo);
+    doc.y = 60;
+  };
 
-        const ensureSpace = () => {
-          const bottomLimit = doc.page.height - doc.page.margins.bottom - 60;
-          if (y > bottomLimit) {
-            addPageWithChrome();
-            y = doc.y;
-            drawHeaderRow();
-          }
-        };
+  const drawGridVerticals = (y) => {
+    doc.save();
+    doc.strokeColor(BRAND.line).strokeOpacity(0.35);
+    let gx = L;
+    for (const c of cols) {
+      doc.moveTo(gx, y).lineTo(gx, y + rowH).stroke();
+      gx += c.w;
+    }
+    doc.moveTo(L + totalW, y).lineTo(L + totalW, y + rowH).stroke();
+    doc.restore();
+  };
 
-        const drawHeaderRow = () => {
-          doc.save();
-          doc.fillColor(BRAND.tableHeaderFill).rect(startX, y, totalW, rowH).fill();
-          doc.restore();
+  const drawHeader = () => {
+    const y = doc.y;
 
-          let x = startX;
-          doc.font("Helvetica-Bold").fontSize(8).fillColor("#111827");
-          cols.forEach((c) => {
-            doc.text(c.label, x + 2, y + 4, { width: c.w - 4, lineBreak: false, ellipsis: true });
-            x += c.w;
-          });
+    doc.save();
+    doc.fillColor(BRAND.tableHeaderFill);
+    doc.rect(L, y, totalW, rowH).fill();
+    doc.restore();
 
-          doc.save();
-          doc.strokeColor(BRAND.line).moveTo(startX, y + rowH).lineTo(startX + totalW, y + rowH).stroke();
-          doc.restore();
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#111827");
+    let x = L;
+    for (const c of cols) {
+      doc.text(c.label, x + 2, y + 4, { width: c.w - 4, lineBreak: false, ellipsis: true });
+      x += c.w;
+    }
 
-          y += rowH;
-        };
+    drawGridVerticals(y);
 
-        const drawDataRow = (r, idx) => {
-          if (idx % 2 === 1) {
-            doc.save();
-            doc.fillColor(BRAND.zebraFill).rect(startX, y, totalW, rowH).fill();
-            doc.restore();
-          }
+    doc.save();
+    doc.strokeColor(BRAND.line);
+    doc.moveTo(L, y + rowH).lineTo(L + totalW, y + rowH).stroke();
+    doc.restore();
 
-          let x = startX;
-          doc.font("Helvetica").fontSize(8).fillColor("#111827");
-          cols.forEach((c) => {
-            doc.text(safe(r?.[c.key] ?? ""), x + 2, y + 4, { width: c.w - 4, lineBreak: false, ellipsis: true });
-            x += c.w;
-          });
+    doc.y = y + rowH;
+  };
 
-          doc.save();
-          doc.strokeColor(BRAND.line).strokeOpacity(0.35).moveTo(startX, y + rowH).lineTo(startX + totalW, y + rowH).stroke();
-          doc.restore();
+  const drawRow = (r, idx) => {
+    const y = doc.y;
 
-          y += rowH;
-          ensureSpace();
-        };
+    if (idx % 2 === 1) {
+      doc.save();
+      doc.fillColor(BRAND.zebraFill);
+      doc.rect(L, y, totalW, rowH).fill();
+      doc.restore();
+    }
 
-        doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Data");
-        doc.moveDown(0.5);
-        y = doc.y;
+    doc.font("Helvetica").fontSize(8).fillColor("#111827");
+    let x = L;
+    for (const c of cols) {
+      doc.text(safe(r?.[c.key] ?? ""), x + 2, y + 4, { width: c.w - 4, lineBreak: false, ellipsis: true });
+      x += c.w;
+    }
 
-        drawHeaderRow();
+    drawGridVerticals(y);
 
-        const MAX = 1500;
-        rows.slice(0, MAX).forEach((r, i) => drawDataRow(r, i));
+    doc.save();
+    doc.strokeColor(BRAND.line).strokeOpacity(0.35);
+    doc.moveTo(L, y + rowH).lineTo(L + totalW, y + rowH).stroke();
+    doc.restore();
 
-        if (rows.length > MAX) {
-          doc.moveDown(1);
-          doc.font("Helvetica").fontSize(9).fillColor(BRAND.subText).text(`Showing first ${MAX} of ${rows.length} rows.`);
-        }
-      }
+    doc.y = y + rowH;
+  };
 
-      doc.end();
+  // Start table
+  if (doc.y > bottomLimit() - rowH * 2) addPageWithChrome();
+  drawHeader();
+
+  const MAX = 1500;
+  for (let i = 0; i < Math.min(rows.length, MAX); i++) {
+    if (doc.y > bottomLimit() - rowH) {
+      addPageWithChrome();
+      drawHeader();
+    }
+    drawRow(rows[i], i);
+  }
+
+  if (rows.length > MAX) {
+    if (doc.y > bottomLimit() - 30) addPageWithChrome();
+    doc.moveDown(1);
+    doc.font("Helvetica").fontSize(9).fillColor(BRAND.subText).text(`Showing first ${MAX} of ${rows.length} rows.`);
+  }
+
+  // Answer goes on a fresh page after the table for readability
+  addPageWithChrome();
+}
+
+// ---- ANSWER (after table) ----
+doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Answer");
+doc.moveDown(0.5);
+doc.font("Helvetica").fontSize(10).fillColor("#111827");
+
+const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+doc.text(answer, { width: pageW });
+
+doc.end();
       await done;
 
       return {
