@@ -468,6 +468,7 @@ const styles = {
     background: "#fff",
     cursor: "pointer",
     lineHeight: 1.2,
+    whiteSpace: "nowrap",
   },
   btnDisabled: { opacity: 0.5, cursor: "not-allowed" },
 
@@ -508,9 +509,11 @@ const styles = {
   },
 
   quickWrap: { display: "flex", flexDirection: "column", gap: 8 },
-  quickRow: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  quickRow: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", width: "100%", },
   select: {
-    flex: 1,
+    flex: "1 1 220px",
+    minWidth: 0,            
+    maxWidth: "100%",  
     border: "1px solid #e5e7eb",
     borderRadius: 8,
     padding: "6px 8px",
