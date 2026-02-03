@@ -391,8 +391,7 @@ function buildQuickPrompt() {
 </div>
         </div>
       </div>
-    </div>
-  );
+      );
 }
 
 const styles = {
