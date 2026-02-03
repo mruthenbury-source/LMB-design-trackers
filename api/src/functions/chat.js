@@ -1,27 +1,64 @@
-
 import { app } from "@azure/functions";
 import { BlobServiceClient } from "@azure/storage-blob";
 
 /**
- * Deterministic /api/chat v2 (NO LLM)
- * Reads state from Azure Blob: container=workback, blob=state.json (defaults)
- * Adds follow-ups via queryState (stateless): client should send back queryState it receives.
+ * Deterministic /api/chat
+ * - NO OpenAI calls.
+ * - Answers ONLY using the state.json data in Azure Blob Storage.
+ * - Supports "TEMPLATE:<id>\nPARAMS:<json>" prompts emitted by ChatOverlay quick questions.
  *
- * Response includes { queryState } but UI can ignore it without breaking.
+ * Expected storage layout (defaults can be overridden with env vars):
+ *   container: workback
+ *   state blob: state.json
+ *   backups weekly: backups/weekly/<anything with YYYY-MM-DD>.json
+ *
+ * Env vars:
+ *   BLOB_CONNECTION_STRING (or AzureWebJobsStorage)
+ *   STATE_CONTAINER (default "workback")
+ *   STATE_BLOB (default "state.json")
+ *   BACKUP_PREFIX (default "backups/weekly/")
+ *   BACKUP_MAX_BYTES (default 8_000_000)
  */
 
-/* ------------------------------ Blob helpers ------------------------------ */
-
-function getConnString() {
-  return process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
+function safeStr(v) {
+  return (v ?? "").toString().trim();
 }
 
-function getContainerName() {
-  return process.env.STATE_CONTAINER || "workback";
+function isoToUtcDate(s) {
+  if (!s) return null;
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
-function getStateBlobName() {
-  return process.env.STATE_BLOB || "state.json";
+function addDaysUTC(iso, days) {
+  const dt = isoToUtcDate(iso);
+  if (!dt || typeof days !== "number") return null;
+  const out = new Date(dt.getTime() + days * 86400000);
+  return out.toISOString().slice(0, 10);
+}
+
+function diffDaysUTC(aISO, bISO) {
+  const a = isoToUtcDate(aISO);
+  const b = isoToUtcDate(bISO);
+  if (!a || !b) return null;
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+function YESNO(b) {
+  return b ? "YES" : "NO";
+}
+
+function getBlobClients() {
+  const conn = process.env.BLOB_CONNECTION_STRING || process.env.AzureWebJobsStorage;
+  const containerName = process.env.STATE_CONTAINER || "workback";
+  if (!conn) throw new Error("Storage connection string is not set (BLOB_CONNECTION_STRING or AzureWebJobsStorage)");
+  const service = BlobServiceClient.fromConnectionString(conn);
+  return { container: service.getContainerClient(containerName) };
 }
 
 async function streamToString(readable) {
@@ -33,113 +70,93 @@ async function streamToString(readable) {
   });
 }
 
-async function loadStateJson() {
-  const conn = getConnString();
-  if (!conn) throw new Error("Missing BLOB_CONNECTION_STRING or AzureWebJobsStorage");
-  const service = BlobServiceClient.fromConnectionString(conn);
-  const container = service.getContainerClient(getContainerName());
-  const blob = container.getBlobClient(getStateBlobName());
+async function readJsonBlob(container, blobName, maxBytes = 8_000_000) {
+  const blob = container.getBlobClient(blobName);
+  const props = await blob.getProperties().catch(() => null);
+  if (props && props.contentLength && props.contentLength > maxBytes) {
+    throw new Error(`Blob too large (${props.contentLength} bytes) for deterministic function limit`);
+  }
   const dl = await blob.download();
   const text = await streamToString(dl.readableStreamBody);
-  return text ? JSON.parse(text) : {};
+  return text ? JSON.parse(text) : null;
 }
 
-/* ------------------------------ Date helpers ----------------------------- */
-
-function safeStr(v) {
-  return (v ?? "").toString().trim();
-}
-
-function isoToDate(iso) {
-  if (!iso) return null;
-  const parts = String(iso).split("-");
-  if (parts.length < 3) return null;
-  const y = Number(parts[0]), m = Number(parts[1]), d = Number(parts[2]);
-  if (!y || !m || !d) return null;
-  return new Date(Date.UTC(y, m - 1, d));
-}
-
-function addDaysISO(iso, days) {
-  const dt = isoToDate(iso);
-  if (!dt || typeof days !== "number" || Number.isNaN(days)) return "";
-  return new Date(dt.getTime() + days * 86400000).toISOString().slice(0, 10);
-}
-
-function subDaysISO(iso, days) {
-  return addDaysISO(iso, -days);
-}
-
-/* ------------------------- Flatten state into tables ---------------------- */
+/* ---------------- index build ---------------- */
 
 function buildIndexFromState(state) {
   const projects = Array.isArray(state?.projects) ? state.projects : [];
-  const globalReqToStatusA = Number(state?.globalDaysReqToStatusA ?? 0);
-  const globalStatusAToFirstIssue = Number(state?.globalDaysStatusAToFirstIssue ?? 0);
+  const globalA = Number(state?.globalDaysReqToStatusA ?? 28);
+  const globalF = Number(state?.globalDaysStatusAToFirstIssue ?? 28);
 
-  const programme = [];
+  // programme levels
+  const programme = projects.flatMap((p) =>
+    (p.master || []).flatMap((m) =>
+      (m.levels || []).map((lv) => ({
+        project: safeStr(p.name),
+        blockZone: safeStr(m.blockZone),
+        level: safeStr(lv.name),
+        startDate: safeStr(lv.startDate),
+        finishDate: safeStr(lv.finishDate),
+      }))
+    )
+  );
+
+  // tracker rows
   const rows = [];
-  const dict = { projects: new Set(), suppliers: new Set(), responsibilities: new Set() };
-
   projects.forEach((p) => {
-    const projectName = safeStr(p?.name);
-    if (projectName) dict.projects.add(projectName);
-
-    // Programme/master
-    (p.master || []).forEach((m) => {
-      const blockZone = safeStr(m?.blockZone);
-      (m.levels || []).forEach((lv) => {
-        programme.push({
-          project: projectName,
-          blockZone,
-          level: safeStr(lv?.name),
-          startDate: safeStr(lv?.startDate),
-          finishDate: safeStr(lv?.finishDate),
-        });
-      });
-    });
-
-    // Tracker rows
     const responsibilities = Array.isArray(p.responsibilities) ? p.responsibilities : [];
+    const pages = Array.isArray(p.pages) ? p.pages : [];
+
     const supplierByRespId = new Map(responsibilities.map((r) => [r.id, safeStr(r.supplier)]));
 
-    responsibilities.forEach((r) => {
-      const sup = safeStr(r?.supplier);
-      const resp = safeStr(r?.name || r?.code);
-      if (sup) dict.suppliers.add(sup);
-      if (resp) dict.responsibilities.add(resp);
-    });
-
-    const pages = Array.isArray(p.pages) ? p.pages : [];
     pages
       .filter((pg) => !pg?.meta?.isMaster)
       .forEach((pg) => {
         const supplier = supplierByRespId.get(pg?.meta?.responsibilityId) || "—";
-        if (supplier && supplier !== "—") dict.suppliers.add(supplier);
-
-        const responsibility = safeStr(pg?.name);
-        if (responsibility) dict.responsibilities.add(responsibility);
-
         (pg.rows || [])
           .filter((r) => r && r.kind !== "header")
+          .filter((r) => !r.notRequired)
           .forEach((r) => {
-            if (r.notRequired) return;
+            const anchorKey = safeStr(r.anchorKey) || "requiredOnSite";
+            const anchor = safeStr(r.anchorDateISO);
 
-            const requiredOnSite = safeStr(r.requiredOnSite || r.requiredOnSiteISO || r.anchorDateISO);
+            const daysA = Number(r.overrideDaysReqToStatusA ?? globalA);
+            const daysF = Number(r.overrideDaysStatusAToFirstIssue ?? globalF);
 
-            const daysReqToStatusA = Number(r.overrideDaysReqToStatusA ?? globalReqToStatusA);
-            const daysStatusAToFirstIssue = Number(r.overrideDaysStatusAToFirstIssue ?? globalStatusAToFirstIssue);
+            // Derive dates from anchor
+            let requiredOnSite = null;
+            let statusA = null;
+            let firstIssue = null;
 
-            const statusA =
-              safeStr(r.statusA || r.statusAISO) ||
-              (requiredOnSite ? subDaysISO(requiredOnSite, daysReqToStatusA) : "");
+            if (anchorKey === "requiredOnSite") {
+              requiredOnSite = anchor || null;
+              statusA = requiredOnSite ? addDaysUTC(requiredOnSite, -daysA) : null;
+              firstIssue = statusA ? addDaysUTC(statusA, daysF) : null;
+            } else if (anchorKey === "statusA") {
+              statusA = anchor || null;
+              requiredOnSite = statusA ? addDaysUTC(statusA, daysA) : null;
+              firstIssue = statusA ? addDaysUTC(statusA, daysF) : null;
+            } else if (anchorKey === "firstIssue") {
+              firstIssue = anchor || null;
+              statusA = firstIssue ? addDaysUTC(firstIssue, -daysF) : null;
+              requiredOnSite = statusA ? addDaysUTC(statusA, daysA) : null;
+            } else {
+              // fallback
+              requiredOnSite = anchor || null;
+              statusA = requiredOnSite ? addDaysUTC(requiredOnSite, -daysA) : null;
+              firstIssue = statusA ? addDaysUTC(statusA, daysF) : null;
+            }
 
-            const firstIssue =
-              safeStr(r.firstIssue || r.firstIssueISO) ||
-              (statusA ? subDaysISO(statusA, daysStatusAToFirstIssue) : "");
+            const comments = Array.isArray(r.comments) ? r.comments : [];
+            const commentsText = comments
+              .map((c) => [safeStr(c?.dateISO), safeStr(c?.name || c?.lockedBy), safeStr(c?.text)].filter(Boolean).join(" — "))
+              .filter(Boolean)
+              .join("\n");
 
             rows.push({
-              project: projectName,
-              responsibility,
+              key: [safeStr(p.name), safeStr(pg.name), safeStr(supplier), safeStr(r.item)].join(" | "),
+              project: safeStr(p.name),
+              responsibility: safeStr(pg.name),
               supplier,
               item: safeStr(r.item),
               requiredOnSite,
@@ -149,339 +166,226 @@ function buildIndexFromState(state) {
                 statusA: !!r.statusADone,
                 firstIssue: !!r.firstIssueDone,
                 completed: !!r.completed,
-                notRequired: !!r.notRequired,
               },
+              comments: commentsText,
+              commentsCount: comments.length,
             });
           });
       });
   });
 
-  return {
-    programme,
-    rows,
-    dict: {
-      projects: [...dict.projects].sort((a, b) => a.localeCompare(b)),
-      suppliers: [...dict.suppliers].sort((a, b) => a.localeCompare(b)),
-      responsibilities: [...dict.responsibilities].sort((a, b) => a.localeCompare(b)),
-    },
-  };
+  return { programme, rows, projectNames: projects.map((p) => safeStr(p.name)).filter(Boolean) };
 }
 
-/* ------------------------------ Question parsing -------------------------- */
+/* ---------------- filters + formatting ---------------- */
 
-function getLastUserText(messages) {
-  if (!Array.isArray(messages)) return "";
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "user") return String(messages[i]?.content || "");
-  }
-  return "";
+function withinRange(level, fromISO, toISO) {
+  const s = isoToUtcDate(level?.startDate);
+  const f = isoToUtcDate(level?.finishDate);
+  const a = isoToUtcDate(fromISO);
+  const b = isoToUtcDate(toISO);
+  if (!s || !f || !a || !b) return false;
+  // overlap inclusive
+  return !(f.getTime() < a.getTime() || s.getTime() > b.getTime());
 }
 
-function normalize(s) {
-  return String(s || "").toLowerCase();
+function formatRowsTable(rows, limit = 120) {
+  const header = ["Project", "Responsibility", "Supplier", "Item", "Req On Site", "Status A", "First Issue", "Done?"].join(" | ");
+  const sep = ["---","---","---","---","---","---","---","---"].join(" | ");
+  const body = rows.slice(0, limit).map((r) => [
+    r.project || "—",
+    r.responsibility || "—",
+    r.supplier || "—",
+    r.item || "—",
+    r.requiredOnSite || "—",
+    r.statusA || "—",
+    r.firstIssue || "—",
+    YESNO(!!r.ticks?.completed),
+  ].join(" | "));
+  const more = rows.length > limit ? `\n\nShowing first ${limit} of ${rows.length}. Narrow by project to see more.` : "";
+  return [header, sep, ...body].join("\n") + more;
 }
 
-function findMention(text, candidates) {
-  const t = normalize(text);
-  const sorted = [...candidates].sort((a, b) => b.length - a.length);
-  for (const c of sorted) {
-    const cNorm = normalize(c);
-    if (!cNorm) continue;
-    if (cNorm.length >= 2 && t.includes(cNorm)) return c;
-  }
-  return "";
+function formatProgrammeTable(levels, limit = 200) {
+  const header = ["Project", "Block/Zone", "Level", "Start", "Finish"].join(" | ");
+  const sep = ["---","---","---","---","---"].join(" | ");
+  const body = levels.slice(0, limit).map((p) => [
+    p.project || "—",
+    p.blockZone || "—",
+    p.level || "—",
+    p.startDate || "—",
+    p.finishDate || "—",
+  ].join(" | "));
+  const more = levels.length > limit ? `\n\nShowing first ${limit} of ${levels.length}. Narrow by project to see more.` : "";
+  return [header, sep, ...body].join("\n") + more;
 }
 
-function parseLimit(text, fallback) {
+function parseTemplateFromUserText(text) {
   const t = String(text || "");
-  const m = t.match(/\blimit\s*=\s*(\d+)\b/i) || t.match(/\btop\s+(\d+)\b/i);
-  if (!m) return fallback;
-  const n = Number(m[1]);
-  return Number.isFinite(n) && n > 0 ? Math.min(n, 200) : fallback;
+  const m = t.match(/^\s*TEMPLATE:([a-z0-9_]+)\s*\n\s*PARAMS:(\{[\s\S]*\})\s*$/i);
+  if (!m) return null;
+  const id = m[1];
+  let params = {};
+  try {
+    params = JSON.parse(m[2]);
+  } catch {
+    params = {};
+  }
+  return { id, params };
 }
 
-function monthKeyFromText(text, defaultYear) {
-  const t = normalize(text);
-  const months = {
-    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
-    may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9,
-    september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+/* ---------------- template handlers ---------------- */
+
+function handleTemplate({ id, params }, idx, todayISO) {
+  const project = safeStr(params?.project);
+  const dateFrom = safeStr(params?.dateFrom);
+  const dateTo = safeStr(params?.dateTo);
+  const asOfDate = safeStr(params?.asOfDate);
+
+  const today = todayISO;
+
+  const rows = idx.rows;
+  const programme = idx.programme;
+
+  const byProject = (r) => !project || safeStr(r.project).toLowerCase() === project.toLowerCase();
+
+  const overdue = (iso) => {
+    const d = isoToUtcDate(iso);
+    const t = isoToUtcDate(today);
+    if (!d || !t) return false;
+    return d.getTime() < t.getTime();
   };
-  const monthWord = Object.keys(months).find((k) => new RegExp(`\\b${k}\\b`).test(t));
-  if (!monthWord) return null;
 
-  const yearMatch = t.match(/\b(20\d{2})\b/);
-  const year = yearMatch ? Number(yearMatch[1]) : Number(defaultYear);
-  const mm = String(months[monthWord]).padStart(2, "0");
-  return `${year}-${mm}`;
-}
-
-function startEndOfMonth(monthKey) {
-  const [yS, mS] = String(monthKey).split("-");
-  const y = Number(yS), m = Number(mS);
-  const start = new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10);
-  const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-  return { start, end };
-}
-
-function overlapsMonth(startDate, finishDate, monthStart, monthEnd) {
-  const s = isoToDate(startDate), f = isoToDate(finishDate);
-  const ms = isoToDate(monthStart), me = isoToDate(monthEnd);
-  if (!s || !f || !ms || !me) return false;
-  return s <= me && f >= ms;
-}
-
-function isOverdue(row, todayISO) {
-  if (row.ticks?.completed || row.ticks?.notRequired) return false;
-
-  if (row.statusA && isoToDate(row.statusA) && !row.ticks?.statusA) {
-    return isoToDate(row.statusA) < isoToDate(todayISO);
+  if (id === "overdue_first_issue_all" || id === "overdue_first_issue_project") {
+    const out = rows.filter(byProject).filter((r) => !r.ticks?.firstIssue).filter((r) => overdue(r.firstIssue));
+    out.sort((a, b) => (safeStr(a.firstIssue) < safeStr(b.firstIssue) ? -1 : 1));
+    return {
+      title: `Overdue First Issue${project ? ` — ${project}` : ""} (today ${today})`,
+      body: formatRowsTable(out),
+    };
   }
-  if (row.requiredOnSite && isoToDate(row.requiredOnSite)) {
-    return isoToDate(row.requiredOnSite) < isoToDate(todayISO);
+
+  if (id === "overdue_statusA_all" || id === "overdue_statusA_project") {
+    const out = rows.filter(byProject).filter((r) => !r.ticks?.statusA).filter((r) => overdue(r.statusA));
+    out.sort((a, b) => (safeStr(a.statusA) < safeStr(b.statusA) ? -1 : 1));
+    return {
+      title: `Overdue Status A${project ? ` — ${project}` : ""} (today ${today})`,
+      body: formatRowsTable(out),
+    };
   }
-  return false;
+
+  if (id === "statusA_approved_all" || id === "statusA_approved_project") {
+    const out = rows.filter(byProject).filter((r) => !!r.ticks?.statusA);
+    out.sort((a, b) => (safeStr(a.statusA) < safeStr(b.statusA) ? -1 : 1));
+    return {
+      title: `Status A Approved${project ? ` — ${project}` : ""}`,
+      body: formatRowsTable(out),
+    };
+  }
+
+  if (id === "done_all" || id === "done_project") {
+    const out = rows.filter(byProject).filter((r) => !!r.ticks?.completed);
+    out.sort((a, b) => (safeStr(a.requiredOnSite) < safeStr(b.requiredOnSite) ? -1 : 1));
+    return {
+      title: `Done items${project ? ` — ${project}` : ""}`,
+      body: formatRowsTable(out),
+    };
+  }
+
+  if (id === "programme_range_all" || id === "programme_range_project") {
+    const out = programme
+      .filter((p) => !project || safeStr(p.project).toLowerCase() === project.toLowerCase())
+      .filter((p) => withinRange(p, dateFrom, dateTo));
+    out.sort((a, b) => (safeStr(a.startDate) < safeStr(b.startDate) ? -1 : 1));
+    return {
+      title: `Programme on site ${dateFrom} → ${dateTo}${project ? ` — ${project}` : ""}`,
+      body: formatProgrammeTable(out),
+    };
+  }
+
+  if (id === "comments_all" || id === "comments_project") {
+    const out = rows
+      .filter(byProject)
+      .filter((r) => (r.commentsCount || 0) > 0)
+      .map((r) => ({
+        project: r.project,
+        responsibility: r.responsibility,
+        supplier: r.supplier,
+        item: r.item,
+        comments: r.comments,
+        commentsCount: r.commentsCount,
+      }));
+
+    // keep response readable
+    const maxItems = 120;
+    const lines = out.slice(0, maxItems).map((r) => {
+      return `• ${r.project} | ${r.responsibility} | ${r.supplier} | ${r.item}\n${r.comments}`;
+    });
+
+    const more = out.length > maxItems ? `\n\nShowing first ${maxItems} of ${out.length}. Narrow by project to see more.` : "";
+    return {
+      title: `Comments${project ? ` — ${project}` : ""}`,
+      body: lines.join("\n\n") + more,
+    };
+  }
+
+  if (id === "compare_programme_all" || id === "compare_programme_project") {
+    // This one is handled outside (needs a backup snapshot). Return a signal.
+    return { needsBackupCompare: true, project, asOfDate };
+  }
+
+  return { title: "Unknown quick question", body: "That template id is not supported by the deterministic backend." };
 }
 
-function isLikelyFollowUp(text) {
-  const t = normalize(text);
-  return /\b(only|just|what about|and|instead|filter|show me|those|them|in)\b/.test(t);
+/* ---------------- backup compare helpers ---------------- */
+
+function extractAnyDateFromName(name) {
+  const m = String(name || "").match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
 }
 
-/**
- * queryState shape returned to client:
- * {
- *  v: 2,
- *  intent: string,
- *  dataset: "tracker"|"programme",
- *  filters: { project?: string, supplier?: string, overdue?: boolean },
- *  params: { monthKey?: string, limit?: number, dateField?: string }
- * }
- */
+function indexProgramme(programme) {
+  const map = new Map();
+  programme.forEach((p) => {
+    const k = [safeStr(p.project), safeStr(p.blockZone), safeStr(p.level)].join(" | ");
+    map.set(k, p);
+  });
+  return map;
+}
 
-function parseNewQuestion(question, dict, uiContext) {
-  const q = String(question || "").trim();
-  const ql = normalize(q);
+function diffProgramme(cur, prev, projectFilter) {
+  const curMap = indexProgramme(cur);
+  const prevMap = indexProgramme(prev);
+  const changes = [];
 
-  const todayISO = safeStr(uiContext?.today) || new Date().toISOString().slice(0, 10);
-  const activeProject = safeStr(uiContext?.activeProject?.name);
-
-  const projectMention = findMention(q, dict.projects) || activeProject;
-  const supplierMention = findMention(q, dict.suppliers);
-
-  const limit = parseLimit(q, 25);
-
-  // Programme
-  if (/\b(on\s*site|onsite|programme|master)\b/.test(ql)) {
-    const mk = monthKeyFromText(q, todayISO.slice(0, 4));
-    if (mk) {
-      return {
-        v: 2,
-        intent: "programme_month",
-        dataset: "programme",
-        filters: { project: projectMention || "" },
-        params: { monthKey: mk, limit: 80 },
-      };
+  for (const [k, c] of curMap.entries()) {
+    if (projectFilter && safeStr(c.project).toLowerCase() !== projectFilter.toLowerCase()) continue;
+    const p = prevMap.get(k);
+    if (!p) continue;
+    if (safeStr(c.startDate) !== safeStr(p.startDate) || safeStr(c.finishDate) !== safeStr(p.finishDate)) {
+      changes.push({
+        project: c.project,
+        blockZone: c.blockZone,
+        level: c.level,
+        start: `${safeStr(p.startDate) || "—"} → ${safeStr(c.startDate) || "—"}`,
+        finish: `${safeStr(p.finishDate) || "—"} → ${safeStr(c.finishDate) || "—"}`,
+      });
     }
   }
 
-  // Tracker intents
-  if (ql.includes("supplier") && (ql.includes("most") || ql.includes("top")) && ql.includes("overdue")) {
-    return {
-      v: 2,
-      intent: "group_count_supplier_overdue",
-      dataset: "tracker",
-      filters: { project: projectMention || "", overdue: true },
-      params: { limit: 20 },
-    };
-  }
-
-  if (ql.includes("overdue") && (ql.includes("next") || ql.includes("soonest") || ql.includes("upcoming"))) {
-    return {
-      v: 2,
-      intent: "next_overdue",
-      dataset: "tracker",
-      filters: { project: projectMention || "", supplier: supplierMention || "", overdue: true },
-      params: { dateField: "requiredOnSite", limit },
-    };
-  }
-
-  if ((ql.includes("status a") || ql.includes("statusa")) && (ql.includes("next") || ql.includes("upcoming"))) {
-    return {
-      v: 2,
-      intent: "next_statusA",
-      dataset: "tracker",
-      filters: { project: projectMention || "", supplier: supplierMention || "" },
-      params: { dateField: "statusA", limit },
-    };
-  }
-
-  if (ql.includes("how many") || ql.startsWith("count") || ql.includes("count")) {
-    const overdue = ql.includes("overdue") ? true : undefined;
-    return {
-      v: 2,
-      intent: "count_items",
-      dataset: "tracker",
-      filters: {
-        project: projectMention || "",
-        supplier: supplierMention || "",
-        ...(overdue !== undefined ? { overdue } : {}),
-      },
-      params: {},
-    };
-  }
-
-  return { v: 2, intent: "help", dataset: "tracker", filters: { project: projectMention || "" }, params: {} };
+  changes.sort((a, b) => (safeStr(a.project) + safeStr(a.blockZone) + safeStr(a.level)).localeCompare(safeStr(b.project) + safeStr(b.blockZone) + safeStr(b.level)));
+  return changes;
 }
 
-function applyFollowUp(prev, question, dict, uiContext) {
-  const q = String(question || "").trim();
-  const ql = normalize(q);
-
-  const next = JSON.parse(JSON.stringify(prev || {}));
-  next.v = 2;
-
-  const activeProject = safeStr(uiContext?.activeProject?.name);
-  const projectMention = findMention(q, dict.projects) || "";
-  const supplierMention = findMention(q, dict.suppliers) || "";
-
-  next.filters = { ...(next.filters || {}) };
-  next.params = { ...(next.params || {}) };
-
-  if (projectMention) next.filters.project = projectMention;
-  else if (activeProject && !next.filters.project) next.filters.project = activeProject;
-
-  if (supplierMention) next.filters.supplier = supplierMention;
-
-  const lim = parseLimit(q, null);
-  if (lim !== null) next.params.limit = lim;
-
-  const todayISO = safeStr(uiContext?.today) || new Date().toISOString().slice(0, 10);
-  const mk = monthKeyFromText(q, todayISO.slice(0, 4));
-  if (mk && next.intent === "programme_month") next.params.monthKey = mk;
-
-  // Explicit switches
-  if (ql.includes("overdue")) next.filters.overdue = true;
-  if (ql.includes("show") && (ql.includes("items") || ql.includes("those"))) {
-    if (next.intent === "group_count_supplier_overdue") next.intent = "next_overdue";
-  }
-
-  return next;
+function formatProgrammeChanges(changes, limit = 200) {
+  const header = ["Project", "Block/Zone", "Level", "Start (before → after)", "Finish (before → after)"].join(" | ");
+  const sep = ["---","---","---","---","---"].join(" | ");
+  const body = changes.slice(0, limit).map((c) => [c.project, c.blockZone, c.level, c.start, c.finish].join(" | "));
+  const more = changes.length > limit ? `\n\nShowing first ${limit} of ${changes.length}. Narrow by project to see more.` : "";
+  return [header, sep, ...body].join("\n") + more;
 }
 
-/* ------------------------------ Execution -------------------------------- */
-
-function execute(plan, index, uiContext) {
-  const todayISO = safeStr(uiContext?.today) || new Date().toISOString().slice(0, 10);
-  const filters = plan?.filters || {};
-  const params = plan?.params || {};
-
-  if (plan.intent === "programme_month") {
-    const mk = params.monthKey;
-    if (!mk) return { answer: "Please specify a month (e.g. February 2026).", data: { intent: plan.intent } };
-
-    const { start, end } = startEndOfMonth(mk);
-    const scoped = filters.project
-      ? index.programme.filter((p) => normalize(p.project) === normalize(filters.project))
-      : index.programme;
-
-    const matches = scoped.filter((p) => overlapsMonth(p.startDate, p.finishDate, start, end));
-    const outRows = matches.slice(0, params.limit || 80);
-    const out = outRows.map((p) => `${p.project} — ${p.blockZone} — ${p.level} | ${p.startDate} → ${p.finishDate}`);
-
-    return {
-      answer: out.length
-        ? `On site in ${mk}${filters.project ? ` for ${filters.project}` : ""}:
-• ${out.join("\n• ")}`
-        : `No programme items found on site in ${mk}${filters.project ? ` for ${filters.project}` : ""}.`,
-      data: { intent: plan.intent, monthKey: mk, count: matches.length, rows: outRows },
-    };
-  }
-
-  // Tracker scope
-  let rows = index.rows;
-  if (filters.project) rows = rows.filter((r) => normalize(r.project) === normalize(filters.project));
-  if (filters.supplier) rows = rows.filter((r) => normalize(r.supplier) === normalize(filters.supplier));
-
-  if (plan.intent === "group_count_supplier_overdue") {
-    const overdue = rows.filter((r) => isOverdue(r, todayISO));
-    const counts = new Map();
-    overdue.forEach((r) => counts.set(r.supplier, (counts.get(r.supplier) || 0) + 1));
-    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, params.limit || 20);
-
-    if (!ranked.length) return { answer: `No overdue items found${filters.project ? ` in ${filters.project}` : ""}.`, data: { intent: plan.intent } };
-
-    const [topSupplier, topCount] = ranked[0];
-    return {
-      answer:
-        `Supplier with the most overdue items${filters.project ? ` in ${filters.project}` : ""}: ${topSupplier} (${topCount}).\n` +
-        `Top suppliers:\n• ${ranked.map(([s, c]) => `${s}: ${c}`).join("\n• ")}`,
-      data: { intent: plan.intent, ranked: ranked.map(([supplier, count]) => ({ supplier, count })) },
-    };
-  }
-
-  if (plan.intent === "next_overdue") {
-    let scoped = rows;
-    if (filters.overdue) scoped = scoped.filter((r) => isOverdue(r, todayISO));
-    scoped.sort((a, b) => (a.requiredOnSite || "").localeCompare(b.requiredOnSite || ""));
-    const outRows = scoped.slice(0, params.limit || 25);
-    const out = outRows.map((r) => `${r.project} — ${r.supplier} — ${r.item} | required on site: ${r.requiredOnSite} | status A: ${r.statusA}`);
-
-    return {
-      answer: out.length
-        ? `Overdue next${filters.project ? ` in ${filters.project}` : ""}${filters.supplier ? ` (${filters.supplier})` : ""}:\n• ${out.join("\n• ")}`
-        : `No overdue items found${filters.project ? ` in ${filters.project}` : ""}.`,
-      data: { intent: plan.intent, count: scoped.length, rows: outRows },
-    };
-  }
-
-  if (plan.intent === "next_statusA") {
-    const pending = rows.filter((r) => r.statusA && !r.ticks?.statusA);
-    pending.sort((a, b) => (a.statusA || "").localeCompare(b.statusA || ""));
-    const outRows = pending.slice(0, params.limit || 25);
-    const out = outRows.map((r) => `${r.statusA} — ${r.supplier} — ${r.item}`);
-
-    return {
-      answer: out.length
-        ? `Next Status A dates${filters.project ? ` in ${filters.project}` : ""}${filters.supplier ? ` (${filters.supplier})` : ""}:\n• ${out.join("\n• ")}`
-        : `No upcoming Status A dates found${filters.project ? ` in ${filters.project}` : ""}.`,
-      data: { intent: plan.intent, count: pending.length, rows: outRows },
-    };
-  }
-
-  if (plan.intent === "count_items") {
-    let scoped = rows;
-    if (filters.overdue === true) scoped = scoped.filter((r) => isOverdue(r, todayISO));
-    const n = scoped.length;
-
-    return {
-      answer:
-        `Count${filters.overdue ? " (overdue)" : ""}` +
-        `${filters.project ? ` in ${filters.project}` : ""}` +
-        `${filters.supplier ? ` for ${filters.supplier}` : ""}: ${n}.`,
-      data: { intent: plan.intent, count: n },
-    };
-  }
-
-  return {
-    answer:
-      `I can answer programme + tracker questions deterministically.\n` +
-      `Try:\n` +
-      `• What is overdue next?\n` +
-      `• Which supplier has the most overdue items?\n` +
-      `• What are the next Status A dates?\n` +
-      `• Count overdue items\n` +
-      `• What is on site in February 2026?\n\n` +
-      `Follow-ups you can ask:\n` +
-      `• Only in Holloway\n` +
-      `• Just Keyfix\n` +
-      `• Top 10\n` +
-      `• What about March 2026`,
-    data: { intent: "help" },
-  };
-}
-
-/* ------------------------------ Azure Function ---------------------------- */
+/* ---------------- main handler ---------------- */
 
 app.http("chat", {
   methods: ["POST"],
@@ -489,30 +393,80 @@ app.http("chat", {
   handler: async (req) => {
     try {
       const body = await req.json().catch(() => ({}));
-      const question = getLastUserText(body?.messages);
-      const uiContext = body?.context || {};
+      const messages = Array.isArray(body?.messages) ? body.messages : [];
+      const appContext = body?.context || {};
+      const userText = safeStr(messages[messages.length - 1]?.content);
 
-      const state = await loadStateJson();
-      const index = buildIndexFromState(state);
+      const todayISO = safeStr(appContext?.today) || new Date().toISOString().slice(0, 10);
 
-      const incoming = body?.queryState;
-      const plan =
-        incoming && isLikelyFollowUp(question)
-          ? applyFollowUp(incoming, question, index.dict, uiContext)
-          : parseNewQuestion(question, index.dict, uiContext);
+      const { container } = getBlobClients();
+      const stateBlob = process.env.STATE_BLOB || "state.json";
+      const state = await readJsonBlob(container, stateBlob);
+      const idx = buildIndexFromState(state || {});
 
-      const result = execute(plan, index, uiContext);
+      // Template-based deterministic quick questions
+      const tpl = parseTemplateFromUserText(userText);
+      if (tpl) {
+        const result = handleTemplate(tpl, idx, todayISO);
 
-      return {
-        status: 200,
-        jsonBody: {
-          answer: result.answer,
-          data: result.data,
-          queryState: plan,
-        },
-      };
-    } catch (err) {
-      return { status: 500, jsonBody: { error: err?.message || String(err) } };
+        if (result?.needsBackupCompare) {
+          const prefix = process.env.BACKUP_PREFIX || "backups/weekly/";
+          const asOfDate = safeStr(result.asOfDate);
+          if (!asOfDate) {
+            return { status: 200, jsonBody: { answer: "Please provide an as-of date (YYYY-MM-DD) to compare against current." } };
+          }
+
+          // Find the newest backup <= asOfDate
+          const candidates = [];
+          for await (const blob of container.listBlobsFlat({ prefix })) {
+            const d = extractAnyDateFromName(blob.name);
+            if (!d) continue;
+            if (d <= asOfDate) candidates.push({ name: blob.name, date: d });
+          }
+          candidates.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+          if (!candidates.length) {
+            return {
+              status: 200,
+              jsonBody: { answer: `No weekly backups found on or before ${asOfDate} under prefix "${prefix}".` },
+            };
+          }
+
+          const chosen = candidates[0];
+          const maxBytes = Number(process.env.BACKUP_MAX_BYTES || 8_000_000);
+          const backupState = await readJsonBlob(container, chosen.name, maxBytes);
+          const backupIdx = buildIndexFromState(backupState || {});
+
+          const changes = diffProgramme(idx.programme, backupIdx.programme, result.project);
+          const title = `Programme changes (${chosen.date} → current)${result.project ? ` — ${result.project}` : ""}`;
+          const bodyText = changes.length ? formatProgrammeChanges(changes) : "No programme date changes found between the selected backup and current.";
+          return { status: 200, jsonBody: { answer: `${title}\n\n${bodyText}` } };
+        }
+
+        return { status: 200, jsonBody: { answer: `${result.title}\n\n${result.body}` } };
+      }
+
+      // Free-text fallback: keep it deterministic and explicit.
+      const help = [
+        "This chat is fully deterministic (no AI).",
+        "",
+        "Use the Quick questions dropdown, or ask using this format:",
+        "TEMPLATE:<id>",
+        'PARAMS:{"project":"Holloway","dateFrom":"2026-01-01","dateTo":"2026-01-31"}',
+        "",
+        "Supported TEMPLATE ids:",
+        "- overdue_first_issue_all / overdue_first_issue_project",
+        "- overdue_statusA_all / overdue_statusA_project",
+        "- statusA_approved_all / statusA_approved_project",
+        "- done_all / done_project",
+        "- programme_range_all / programme_range_project",
+        "- compare_programme_all / compare_programme_project",
+        "- comments_all / comments_project",
+      ].join("\n");
+
+      return { status: 200, jsonBody: { answer: help } };
+    } catch (e) {
+      return { status: 500, jsonBody: { error: "deterministic chat handler error", details: String(e) } };
     }
   },
 });
