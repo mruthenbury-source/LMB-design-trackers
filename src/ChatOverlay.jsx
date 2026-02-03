@@ -301,19 +301,23 @@ function buildQuickPrompt() {
               Use quick questions below, or ask anything in the query box.
             </div>
           ) : (
-            messages.map((m, idx) => {
-              const role = m.role ?? m.type;
-              const isUser = role === "user";
-              const content = m.content ?? m.text ?? "";
-              return (
-                <div key={idx} style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
-                  <div style={{ ...styles.bubble, ...(isUser ? styles.userBubble : styles.assistantBubble) }}>
-                    {content}
-                  </div>
-                </div>
-              );
-            })
-          )}
+            (Array.isArray(messages) ? messages : [])
+  .filter(Boolean)
+  .map((m, idx) => {
+    const role = m?.role ?? m?.type;
+    const isUser = role === "user";
+    const raw = m?.content ?? m?.text ?? "";
+    const content =
+      typeof raw === "string" ? raw : (() => { try { return JSON.stringify(raw); } catch { return String(raw); } })();
+
+    return (
+      <div key={idx} style={{ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }}>
+        <div style={{ ...styles.bubble, ...(isUser ? styles.userBubble : styles.assistantBubble) }}>
+          {content}
+        </div>
+      </div>
+    );
+  })}
         </div>
 
         {/* Footer ALWAYS visible */}
@@ -410,7 +414,10 @@ function buildQuickPrompt() {
     </div>
   )}
 </div>
-<div style={styles.queryBoxLabel}>Ask anything:</div>
+
+          {/* FREE QUERY BOX (always visible) */}
+          <div style={styles.queryBlock}>
+            <div style={styles.queryBoxLabel}>Ask anything:</div>
 
   <textarea
     value={input}
@@ -450,8 +457,8 @@ function buildQuickPrompt() {
       Send
     </button>
   </div>
-</div>
-        </div>
+          </div>
+        </div
       </div>
     </div>
   );
