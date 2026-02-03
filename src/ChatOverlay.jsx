@@ -48,27 +48,7 @@ export default function ChatOverlay(props) {
   const chatContext = props.chatContext;
   const programmeData = props.programmeData;
 
-const projectOptions = useMemo(() => {
-  // Prefer options from props.projects or chatContext.state.projects or chatContext.projects,
-  // and fall back to /api/meta results.
-  const fromProps = Array.isArray(props.projects) ? props.projects : [];
-  const ctx = chatContext || {};
-  const fromState = Array.isArray(ctx?.state?.projects) ? ctx.state.projects : [];
-  const fromCtxProjects = Array.isArray(ctx?.projects) ? ctx.projects : [];
-  const fromMeta = Array.isArray(metaProjects) ? metaProjects : [];
-
-  const names = []
-    .concat(fromProps)
-    .concat(fromState)
-    .concat(fromCtxProjects)
-    .concat(fromMeta)
-    .map((p) => (typeof p === "string" ? p : p?.name))
-    .filter(Boolean)
-    .map((s) => String(s).trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-}, [props.projects, chatContext, metaProjects]);const sendChat =
+  const sendChat =
     props.sendChat ??
     (async (text) => {
       if (typeof props.onSend === "function") {
@@ -78,13 +58,18 @@ const projectOptions = useMemo(() => {
 
   // --- Quick question UI ---
   const [quickId, setQuickId] = useState("");
-  const [quickParams, setQuickParams] = useState({ project: "", dateFrom: "", dateTo: "", asOfDate: "" });
-const [metaProjects, setMetaProjects] = useState([]);
-const [metaLoaded, setMetaLoaded] = useState(false);
+  const [quickProject, setQuickProject] = useState("");
+  const [quickDateFrom, setQuickDateFrom] = useState("");
+  const [quickDateTo, setQuickDateTo] = useState("");
+  const [quickAsOfDate, setQuickAsOfDate] = useState("");
+
+  const [metaProjects, setMetaProjects] = useState([]);
+  const [metaLoaded, setMetaLoaded] = useState(false);
+const listRef = useRef(null);
+
 
 useEffect(() => {
-  // Pull projects deterministically from /api/meta (optional helper). This keeps the dropdown populated
-  // even when chatContext/props don't include the project list.
+  // Pull projects deterministically from /api/meta if not available via props/chatContext.
   if (metaLoaded) return;
   (async () => {
     try {
@@ -92,13 +77,12 @@ useEffect(() => {
       const j = await res.json();
       if (j && j.ok && Array.isArray(j.projects)) setMetaProjects(j.projects);
     } catch {
-      // ignore: dropdown will fall back to any projects present in props/chatContext
+      // ignore
     } finally {
       setMetaLoaded(true);
     }
   })();
 }, [metaLoaded]);
-const listRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
@@ -115,6 +99,27 @@ const listRef = useRef(null);
           chatContext.programmeData ||
           chatContext.programmeIndex ||
           chatContext.programmeRows));
+
+const projectOptions = useMemo(() => {
+  const ctx = chatContext || {};
+  const fromProps = Array.isArray(props.projects) ? props.projects : [];
+  const fromState = Array.isArray(ctx?.state?.projects) ? ctx.state.projects : [];
+  const fromCtxProjects = Array.isArray(ctx?.projects) ? ctx.projects : [];
+  const fromMeta = Array.isArray(metaProjects) ? metaProjects : [];
+
+  const names = []
+    .concat(fromProps)
+    .concat(fromState)
+    .concat(fromCtxProjects)
+    .concat(fromMeta)
+    .map((p) => (typeof p === "string" ? p : p?.name))
+    .filter(Boolean)
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+}, [props.projects, chatContext, metaProjects]);
+
     return hasProgramme
       ? "Use PROGRAMME data (not tracker rows) for on-site level questions. If programme data is missing, say so."
       : "Programme data may be missing—if so, say you cannot answer accurately.";
@@ -134,23 +139,11 @@ const listRef = useRef(null);
     { id: "done_all", label: "Which items are marked as done (all projects)", params: [] },
     { id: "done_project", label: "Which items are marked as done (specific project)", params: [{ key: "project", type: "project" }] },
 
-    {
-      id: "programme_range_all",
-      label: "Construction programme on site during date range (all projects)",
-      params: [{ key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }],
-    },
-    {
-      id: "programme_range_project",
-      label: "Construction programme on site during date range (specific project)",
-      params: [{ key: "project", type: "project" }, { key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }],
-    },
+    { id: "programme_range_all", label: "Construction programme on site during date range (all projects)", params: [{ key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }] },
+    { id: "programme_range_project", label: "Construction programme on site during date range (specific project)", params: [{ key: "project", type: "project" }, { key: "dateFrom", type: "date" }, { key: "dateTo", type: "date" }] },
 
-    { id: "compare_programme_all", label: "Compare programme: as-of date vs current (all projects, uses backups)", params: [{ key: "asOfDate", type: "date" }] },
-    {
-      id: "compare_programme_project",
-      label: "Compare programme: as-of date vs current (specific project, uses backups)",
-      params: [{ key: "project", type: "project" }, { key: "asOfDate", type: "date" }],
-    },
+    { id: "compare_programme_all", label: "Compare construction programmes: as-of date vs current (all projects)", params: [{ key: "asOfDate", type: "date" }] },
+    { id: "compare_programme_project", label: "Compare construction programmes: as-of date vs current (specific project)", params: [{ key: "project", type: "project" }, { key: "asOfDate", type: "date" }] },
 
     { id: "comments_all", label: "Return all comments (all projects)", params: [] },
     { id: "comments_project", label: "Return comments (specific project)", params: [{ key: "project", type: "project" }] },
@@ -158,7 +151,7 @@ const listRef = useRef(null);
   []
 );
 
-    const selectedQuick = useMemo(() => quickTemplates.find((q) => q.id === quickId) || null, [quickTemplates, quickId]);
+  const selectedQuick = useMemo(() => quickTemplates.find((q) => q.id === quickId) || null, [quickTemplates, quickId]);
 
   function buildQuickPrompt() {
   const q = quickTemplates.find((x) => x.id === quickId);
@@ -166,17 +159,19 @@ const listRef = useRef(null);
 
   const params = {};
   for (const p of q.params || []) {
-    if (p.type === "project") params.project = (quickParams.project || "").trim();
-    if (p.type === "date") params[p.key] = (quickParams[p.key] || "").trim();
+    if (p.type === "project") params.project = (quickProject || "").trim();
+    if (p.type === "date" && p.key === "dateFrom") params.dateFrom = (quickDateFrom || "").trim();
+    if (p.type === "date" && p.key === "dateTo") params.dateTo = (quickDateTo || "").trim();
+    if (p.type === "date" && p.key === "asOfDate") params.asOfDate = (quickAsOfDate || "").trim();
   }
 
+  // Require any needed params
   for (const p of q.params || []) {
     if (p.type === "project" && !params.project) return "";
     if (p.type === "date" && !params[p.key]) return "";
   }
 
-  // Deterministic marker parsed by the backend:
-  // TEMPLATE:<id>\nPARAMS:<json>
+  // Deterministic marker parsed by backend:
   return `TEMPLATE:${q.id}\nPARAMS:${JSON.stringify(params)}`;
 }
 
@@ -267,123 +262,113 @@ const listRef = useRef(null);
           )}
         </div>
 
-        
-{/* Footer ALWAYS visible */}
-<div style={styles.footer}>
-  {/* Quick questions */}
-  <div style={styles.quickWrap}>
-    <div style={styles.quickRow}>
-      <select
-        value={quickId}
-        onChange={(e) => {
-          setQuickId(e.target.value);
-          setQuickParams({ project: "", dateFrom: "", dateTo: "", asOfDate: "" });
-        }}
-        style={styles.select}
-      >
-        <option value="">Quick questions…</option>
-        {quickTemplates.map((q) => (
-          <option key={q.id} value={q.id}>
-            {q.label}
+        {/* Footer ALWAYS visible */}
+        <div style={styles.footer}>
+          {/* Quick questions */}
+          <div style={styles.quickWrap}>
+            <div style={styles.quickRow}>
+              <select value={quickId} onChange={(e) => { setQuickId(e.target.value); setQuickProject(""); setQuickDateFrom(""); setQuickDateTo(""); setQuickAsOfDate(""); }} style={styles.select}>
+                <option value="">Quick questions…</option>
+                {quickTemplates.map((q) => (
+                  <option key={q.id} value={q.id}>
+                    {q.label}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={insertQuick}
+                disabled={!buildQuickPrompt()}
+                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+              >
+                Insert
+              </button>
+
+              <button
+                type="button"
+                onClick={askQuick}
+                disabled={!buildQuickPrompt()}
+                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+              >
+                Ask
+              </button>
+            </div>
+
+            
+{(selectedQuick?.params?.length > 0) && (
+  <div style={styles.quickRow}>
+    {selectedQuick.params.some((p) => p.type === "project") && (
+      <select value={quickProject} onChange={(e) => setQuickProject(e.target.value)} style={styles.select}>
+        <option value="">
+          {projectOptions.length ? "Select project…" : metaLoaded ? "No projects found" : "Loading projects…"}
+        </option>
+        {projectOptions.map((p) => (
+          <option key={p} value={p}>
+            {p}
           </option>
         ))}
       </select>
+    )}
 
-      <button
-        type="button"
-        onClick={insertQuick}
-        disabled={!buildQuickPrompt()}
-        style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-      >
-        Insert
-      </button>
-
-      <button
-        type="button"
-        onClick={askQuick}
-        disabled={!buildQuickPrompt()}
-        style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-      >
-        Ask
-      </button>
-    </div>
-
-    {selectedQuick?.params?.length > 0 && (
-      <div style={styles.quickRow}>
-        {selectedQuick.params.some((p) => p.type === "project") && (
-          <select
-            value={quickParams.project}
-            onChange={(e) => setQuickParams((s) => ({ ...s, project: e.target.value }))}
-            style={styles.select}
-          >
-            <option value="">{projectOptions.length ? "Select project…" : (metaLoaded ? "No projects found" : "Loading projects…")}</option>
-            {projectOptions.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {selectedQuick.params.some((p) => p.key === "dateFrom") && (
-          <input
-            type="date"
-            value={quickParams.dateFrom}
-            onChange={(e) => setQuickParams((s) => ({ ...s, dateFrom: e.target.value }))}
-            style={styles.input}
-            title="From"
-          />
-        )}
-
-        {selectedQuick.params.some((p) => p.key === "dateTo") && (
-          <input
-            type="date"
-            value={quickParams.dateTo}
-            onChange={(e) => setQuickParams((s) => ({ ...s, dateTo: e.target.value }))}
-            style={styles.input}
-            title="To"
-          />
-        )}
-
-        {selectedQuick.params.some((p) => p.key === "asOfDate") && (
-          <input
-            type="date"
-            value={quickParams.asOfDate}
-            onChange={(e) => setQuickParams((s) => ({ ...s, asOfDate: e.target.value }))}
-            style={styles.input}
-            title="As-of date"
-          />
-        )}
-      </div>
+    {selectedQuick.params.some((p) => p.key === "dateFrom") && (
+      <input type="date" value={quickDateFrom} onChange={(e) => setQuickDateFrom(e.target.value)} style={styles.input} />
+    )}
+    {selectedQuick.params.some((p) => p.key === "dateTo") && (
+      <input type="date" value={quickDateTo} onChange={(e) => setQuickDateTo(e.target.value)} style={styles.input} />
+    )}
+    {selectedQuick.params.some((p) => p.key === "asOfDate") && (
+      <input type="date" value={quickAsOfDate} onChange={(e) => setQuickAsOfDate(e.target.value)} style={styles.input} />
     )}
   </div>
+)}
+placeholder="Project name…"
+                    style={styles.input}
+                  />
+                )}
+                {selectedQuick?.needsOnSite && (
+                  <input
+                    value={quickOnSite}
+                    onChange={(e) => setQuickOnSite(e.target.value)}
+                    placeholder="Month / date / range…"
+                    style={styles.input}
+                  />
+                )}
+              </div>
+            )}
+          </div>
 
-  {/* Query box */}
-  <div style={styles.queryBlock}>
-    <div style={styles.queryBoxLabel}>Query</div>
+{/* FREE QUERY BOX (always visible, below quick questions) */}
+<div style={styles.queryBlock}>
+  <div style={styles.queryBoxLabel}>Ask anything:</div>
 
-    <div style={styles.composer}>
-      <textarea
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        placeholder="Type a question, or use Quick questions above…"
-        style={styles.textarea}
-        disabled={busy}
-      />
-    </div>
+  <textarea
+    value={input}
+    onChange={(e) => setInput(e.target.value)}
+    placeholder="Type a message…"
+    style={styles.textarea}
+    rows={2}
+    disabled={false}
+    onKeyDown={(e) => {
+      // Enter to send, Shift+Enter newline
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    }}
+  />
 
-    <div style={styles.sendRow}>
-      <button
-        type="button"
-        onClick={() => handleSend()}
-        disabled={busy || !input.trim()}
-        style={{ ...styles.sendBtn, ...(busy || !input.trim() ? styles.btnDisabled : null) }}
-      >
-        Send
-      </button>
-    </div>
+  <div style={styles.sendRow}>
+    <button
+      onClick={() => handleSend()}
+      disabled={busy || !String(input).trim()}
+      style={{ ...styles.sendBtn, ...(busy || !String(input).trim() ? styles.btnDisabled : null) }}
+    >
+      Send
+    </button>
   </div>
 </div>
+        </div>
       </div>
     </div>
   );
@@ -456,7 +441,6 @@ const styles = {
   checkboxLabel: { fontSize: 11, color: "#111827" },
 
   smallBtn: {
-    flexShrink: 0,
     fontSize: 11,
     padding: "4px 8px",
     borderRadius: 8,
@@ -506,8 +490,7 @@ const styles = {
   quickWrap: { display: "flex", flexDirection: "column", gap: 8 },
   quickRow: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
   select: {
-    flex: "1 1 260px",
-    minWidth: 220,
+    flex: 1,
     border: "1px solid #e5e7eb",
     borderRadius: 8,
     padding: "6px 8px",
