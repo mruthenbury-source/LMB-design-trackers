@@ -7,6 +7,21 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ---- CONFIG YOU CAN EDIT ----
+const BRAND = {
+  companyName: "LMB Design Trackers",      // footer text
+  // Dark grey header bar (avoid bright colours for print)
+  headerFill: "#111827",
+  headerText: "#FFFFFF",
+  subText: "#6B7280",
+  tableHeaderFill: "#F3F4F6",
+  zebraFill: "#FAFAFA",
+  line: "#D1D5DB",
+  // Change to your file name if needed:
+  logoFile: "logo.png",
+};
+
+// Keep answer text within page width (PDFKit does wrapping automatically if width is set)
 function safe(v) {
   if (v === null || v === undefined) return "";
   return typeof v === "string" ? v : JSON.stringify(v);
@@ -14,36 +29,55 @@ function safe(v) {
 
 function loadLogo() {
   try {
-    return fs.readFileSync(
-      path.join(__dirname, "..", "assets", "logo.png")
-    );
+    return fs.readFileSync(path.join(__dirname, "..", "assets", BRAND.logoFile));
   } catch {
     return null;
   }
 }
 
-function headerFooter(doc, title, logo, pageNo) {
+function drawHeaderFooter(doc, title, logoBuf, pageNo) {
   const L = doc.page.margins.left;
   const R = doc.page.width - doc.page.margins.right;
   const T = doc.page.margins.top;
   const B = doc.page.height - doc.page.margins.bottom;
 
-  // Header line
-  doc.moveTo(L, T - 10).lineTo(R, T - 10).stroke();
+  // HEADER BAR
+  const barH = 42;
+  doc.save();
+  doc.rect(0, 0, doc.page.width, barH).fill(BRAND.headerFill);
 
-  if (logo) doc.image(logo, L, T - 36, { width: 80 });
+  // Logo
+  if (logoBuf) {
+    // Place inside header bar with padding; size to fit bar height
+    doc.image(logoBuf, L, 8, { height: barH - 16 });
+  }
 
-  doc.font("Helvetica-Bold")
+  // Title text (white)
+  const titleX = L + (logoBuf ? 120 : 0);
+  doc
+    .fillColor(BRAND.headerText)
+    .font("Helvetica-Bold")
     .fontSize(14)
-    .text(title, L + (logo ? 95 : 0), T - 34);
+    .text(title, titleX, 12, { width: R - titleX, align: "left" });
 
-  // Footer
-  doc.moveTo(L, B + 10).lineTo(R, B + 10).stroke();
+  doc.restore();
 
-  doc.fontSize(9).fillColor("gray");
-  doc.text(`Generated ${new Date().toLocaleString()}`, L, B + 16);
-  doc.text(`Page ${pageNo}`, L, B + 16, { width: R - L, align: "right" });
-  doc.fillColor("black");
+  // FOOTER
+  doc.save();
+  doc.strokeColor(BRAND.line).moveTo(L, B + 12).lineTo(R, B + 12).stroke();
+  doc
+    .fillColor(BRAND.subText)
+    .font("Helvetica")
+    .fontSize(9)
+    .text(`${BRAND.companyName} • Generated ${new Date().toLocaleString()}`, L, B + 18, { align: "left" });
+
+  doc
+    .fillColor(BRAND.subText)
+    .font("Helvetica")
+    .fontSize(9)
+    .text(`Page ${pageNo}`, L, B + 18, { width: R - L, align: "right" });
+
+  doc.restore();
 }
 
 app.http("exportPdf", {
@@ -56,8 +90,9 @@ app.http("exportPdf", {
       const title = safe(body.title || "Chat Export");
       const answer = safe(body.answer || "");
       const rows = Array.isArray(body.rows) ? body.rows : [];
+      const meta = body.meta && typeof body.meta === "object" ? body.meta : null;
 
-      const doc = new PDFDocument({ margin: 40 });
+      const doc = new PDFDocument({ size: "A4", margin: 40 });
       const buffers = [];
       doc.on("data", (d) => buffers.push(d));
       const done = new Promise((r) => doc.on("end", r));
@@ -65,77 +100,142 @@ app.http("exportPdf", {
       const logo = loadLogo();
       let pageNo = 1;
 
-      headerFooter(doc, title, logo, pageNo);
+      // Draw on first page + every new page
+      drawHeaderFooter(doc, title, logo, pageNo);
       doc.on("pageAdded", () => {
         pageNo++;
-        headerFooter(doc, title, logo, pageNo);
+        drawHeaderFooter(doc, title, logo, pageNo);
       });
 
-      // ===== ANSWER TEXT =====
-      doc.moveDown(2);
-      doc.fontSize(12).font("Helvetica-Bold").text("Answer");
-      doc.moveDown(0.5);
-      doc.fontSize(10).font("Helvetica").text(answer, { width: 500 });
+      // Start content below header bar
+      doc.y = 60;
 
-      // ===== TABLE =====
+      // ---- PARAMETERS (optional) ----
+      if (meta) {
+        doc.font("Helvetica-Bold").fontSize(11).fillColor("#111827").text("Parameters");
+        doc.moveDown(0.3);
+        doc.font("Helvetica").fontSize(10).fillColor("#111827");
+
+        Object.keys(meta).forEach((k) => {
+          doc.fillColor(BRAND.subText).font("Helvetica-Bold").text(`${k}: `, { continued: true });
+          doc.fillColor("#111827").font("Helvetica").text(safe(meta[k]));
+        });
+
+        doc.moveDown(0.8);
+      }
+
+      // ---- ANSWER TEXT ----
+      doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Answer");
+      doc.moveDown(0.5);
+      doc.font("Helvetica").fontSize(10).fillColor("#111827");
+
+      const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      doc.text(answer, { width: pageW });
+
+      // ---- TABLE ----
       if (rows.length) {
         doc.addPage();
+        doc.y = 60;
 
-        const pageW =
-          doc.page.width - doc.page.margins.left - doc.page.margins.right;
+        const pageW2 = doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
+        // Column widths (easy to tweak)
+        // Make Item auto-fill remainder.
         const cols = [
-          { key: "project", label: "Project", w: 80 },
+          { key: "project", label: "Project", w: 85 },
           { key: "supplier", label: "Supplier", w: 70 },
-          { key: "responsibility", label: "Resp", w: 70 },
-          {
-            key: "item",
-            label: "Item",
-            w: pageW - (80 + 70 + 70 + 55 + 55),
-          },
+          { key: "responsibility", label: "Resp", w: 80 },
           { key: "requiredOnSite", label: "Req", w: 55 },
           { key: "statusA", label: "A", w: 55 },
         ];
+        const used = cols.reduce((a, c) => a + c.w, 0);
+        const itemW = Math.max(140, pageW2 - used); // minimum width so it never collapses
+        const allCols = [
+          cols[0],
+          cols[1],
+          cols[2],
+          { key: "item", label: "Item", w: itemW },
+          cols[3],
+          cols[4],
+        ];
 
         const startX = doc.page.margins.left;
-        let y = doc.y + 10;
-        const rowH = 14;
-        const totalW = cols.reduce((a, c) => a + c.w, 0);
+        let y = doc.y;
+        const rowH = 16;
+        const totalW = allCols.reduce((a, c) => a + c.w, 0);
 
-        const drawRow = (vals, header = false) => {
-          let x = startX;
-          doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(8);
-
-          vals.forEach((v, i) => {
-            doc.text(safe(v), x, y, {
-              width: cols[i].w,
-              ellipsis: true,
-            });
-            x += cols[i].w;
-          });
-
-          // Row line
-          doc
-            .moveTo(startX, y + rowH - 2)
-            .lineTo(startX + totalW, y + rowH - 2)
-            .strokeOpacity(0.2)
-            .stroke()
-            .strokeOpacity(1);
-
-          y += rowH;
-
-          if (y > doc.page.height - doc.page.margins.bottom - 40) {
+        const ensureSpace = () => {
+          if (y > doc.page.height - doc.page.margins.bottom - 60) {
             doc.addPage();
-            y = doc.page.margins.top + 20;
+            doc.y = 60;
+            y = doc.y;
+            drawTableHeader(); // repeat header on new pages
           }
         };
 
-        // Header row
-        drawRow(cols.map((c) => c.label), true);
+        const drawTableHeader = () => {
+          // Header background
+          doc.save();
+          doc.fillColor(BRAND.tableHeaderFill).rect(startX, y, totalW, rowH).fill();
+          doc.restore();
 
-        rows.slice(0, 1000).forEach((r) =>
-          drawRow(cols.map((c) => r?.[c.key] ?? ""))
-        );
+          // Header text
+          let x = startX;
+          doc.font("Helvetica-Bold").fontSize(8).fillColor("#111827");
+          for (const c of allCols) {
+            doc.text(c.label, x + 2, y + 4, { width: c.w - 4, ellipsis: true });
+            x += c.w;
+          }
+
+          // Header bottom line
+          doc.save();
+          doc.strokeColor(BRAND.line).moveTo(startX, y + rowH).lineTo(startX + totalW, y + rowH).stroke();
+          doc.restore();
+
+          y += rowH;
+        };
+
+        const drawRow = (r, idx) => {
+          // Zebra
+          if (idx % 2 === 1) {
+            doc.save();
+            doc.fillColor(BRAND.zebraFill).rect(startX, y, totalW, rowH).fill();
+            doc.restore();
+          }
+
+          let x = startX;
+          doc.font("Helvetica").fontSize(8).fillColor("#111827");
+          for (const c of allCols) {
+            doc.text(safe(r?.[c.key] ?? ""), x + 2, y + 4, {
+              width: c.w - 4,
+              ellipsis: true,
+            });
+            x += c.w;
+          }
+
+          // Row line
+          doc.save();
+          doc.strokeColor(BRAND.line).strokeOpacity(0.4).moveTo(startX, y + rowH).lineTo(startX + totalW, y + rowH).stroke();
+          doc.restore();
+
+          y += rowH;
+          ensureSpace();
+        };
+
+        // Title
+        doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827").text("Data");
+        doc.moveDown(0.5);
+        y = doc.y;
+
+        drawTableHeader();
+
+        const MAX = 1500; // bump if you want
+        rows.slice(0, MAX).forEach((r, i) => drawRow(r, i));
+
+        if (rows.length > MAX) {
+          doc.moveDown(1);
+          doc.font("Helvetica").fontSize(9).fillColor(BRAND.subText).text(`Showing first ${MAX} of ${rows.length} rows.`);
+        }
       }
 
       doc.end();
@@ -157,5 +257,6 @@ app.http("exportPdf", {
     }
   },
 });
+
 
 
