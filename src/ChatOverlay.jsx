@@ -432,12 +432,17 @@ function buildQuickPrompt() {
 <button
   type="button"
   onClick={exportPdf}
-  disabled={!lastAnswerText}
-  style={styles.smallBtn}
+  disabled={!((lastChatResult?.answer || getLastAssistantText() || "").trim())}
+  style={{
+    ...styles.smallBtn,
+    marginRight: 8,
+    ...(!((lastChatResult?.answer || getLastAssistantText() || "").trim()) ? styles.btnDisabled : null),
+  }}
+  title="Export the latest answer to PDF"
 >
   Export PDF
-</button>   
-    <button
+</button>
+<button
       onClick={() => handleSend()}
       disabled={busy || !String(input).trim()}
       style={{ ...styles.sendBtn, ...(busy || !String(input).trim() ? styles.btnDisabled : null) }}
@@ -448,7 +453,8 @@ function buildQuickPrompt() {
 </div>
         </div>
       </div>
-      );
+    </div>
+  );
 }
 
 const styles = {
