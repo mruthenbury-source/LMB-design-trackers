@@ -56,59 +56,31 @@ export default function ChatOverlay(props) {
       }
     });
 
-
-const [lastChatResult, setLastChatResult] = useState(null);
-
-function getLastAssistantText() {
-  const arr = Array.isArray(messages) ? messages : [];
-  for (let i = arr.length - 1; i >= 0; i--) {
-    const m = arr[i];
-    if (m?.role === "assistant") {
-      if (typeof m.content === "string") return m.content;
-      if (typeof m.text === "string") return m.text;
-    }
-  }
-  return "";
-}
-
-async function exportPdf() {
-  const answerText = (lastChatResult?.answer || getLastAssistantText() || "").trim();
-  if (!answerText) return;
-
-  const payload = {
-    title: "LMBDesignTrackers Chat Export",
-    answer: answerText,
-    rows: Array.isArray(lastChatResult?.data?.rows) ? lastChatResult.data.rows : [],
-    meta: lastChatResult?.data?.meta || {},
-  };
-
-  const res = await fetch("/api/exportPdf", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    alert("Export failed. " + (t || res.status));
-    return;
-  }
-
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "chat-export.pdf";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
   // --- Quick question UI ---
   const [quickId, setQuickId] = useState("");
-  const [quickProject, setQuickProject] = useState("");
-  const [quickOnSite, setQuickOnSite] = useState("");
+const [quickProject, setQuickProject] = useState("");
+const [quickOnSite, setQuickOnSite] = useState(""); // kept for backward compatibility (unused by templates)
+const [quickDateFrom, setQuickDateFrom] = useState("");
+const [quickDateTo, setQuickDateTo] = useState("");
+const [quickAsOfDate, setQuickAsOfDate] = useState("");
+
+const [metaProjects, setMetaProjects] = useState([]);
+const [metaLoaded, setMetaLoaded] = useState(false);
+
+useEffect(() => {
+  if (metaLoaded) return;
+  (async () => {
+    try {
+      const res = await fetch("/api/meta");
+      const j = await res.json();
+      if (j && j.ok && Array.isArray(j.projects)) setMetaProjects(j.projects);
+    } catch {
+      // ignore
+    } finally {
+      setMetaLoaded(true);
+    }
+  })();
+}, [metaLoaded]);
 
   const listRef = useRef(null);
 
@@ -132,99 +104,81 @@ async function exportPdf() {
       : "Programme data may be missing—if so, say you cannot answer accurately.";
   }, [chatContext, programmeData]);
 
-  const quickTemplates = useMemo(
-    () => [
-      {
-        id: "statusA_all",
-        label: "Status A overdue — all projects",
-        needsProject: false,
-        needsOnSite: false,
-        build: () =>
-          [
-            "Using ONLY the current tracker context, list all projects with Status A overdue.",
-            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
-            "If a field is missing, state it—do not guess.",
-          ].join("\n"),
-      },
-      {
-        id: "statusA_project",
-        label: "Status A overdue — specific project",
-        needsProject: true,
-        needsOnSite: false,
-        build: (p) =>
-          [
-            `Using ONLY the current tracker context, list all Status A overdue items for project: "${p}".`,
-            "Return: Level/Block, item/row reference, due date, days overdue.",
-            "If the project name doesn't match exactly, show the closest matches and ask which to use.",
-          ].join("\n"),
-      },
-      {
-        id: "firstIssue_all",
-        label: "First Issue overdue — all projects",
-        needsProject: false,
-        needsOnSite: false,
-        build: () =>
-          [
-            "Using ONLY the current tracker context, list all projects with First Issue overdue.",
-            "Return: Project name, Level/Block, item/row reference, due date, days overdue.",
-            "If a field is missing, state it—do not guess.",
-          ].join("\n"),
-      },
-      {
-        id: "firstIssue_project",
-        label: "First Issue overdue — specific project",
-        needsProject: true,
-        needsOnSite: false,
-        build: (p) =>
-          [
-            `Using ONLY the current tracker context, list all First Issue overdue items for project: "${p}".`,
-            "Return: Level/Block, item/row reference, due date, days overdue.",
-            "If the project name doesn't match exactly, show the closest matches and ask which to use.",
-          ].join("\n"),
-      },
-      {
-        id: "onsite_all",
-        label: "All levels on site in… — all projects (programme)",
-        needsProject: false,
-        needsOnSite: true,
-        build: (_p, d) =>
-          [
-            programmeHint,
-            `Using ONLY the PROGRAMME context, list ALL levels across ALL projects that are on site in: "${d}".`,
-            "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
-            "Return: Project name, Level/Block, on-site date (or range), and which programme field(s) you used.",
-            "Do NOT use tracker rows for this question.",
-          ].join("\n"),
-      },
-      {
-        id: "onsite_project",
-        label: "All levels on site in… — specific project (programme)",
-        needsProject: true,
-        needsOnSite: true,
-        build: (p, d) =>
-          [
-            programmeHint,
-            `Using ONLY the PROGRAMME context, list ALL levels for project: "${p}" that are on site in: "${d}".`,
-            "Interpret the input as a month/date/range and match levels scheduled on site within that period.",
-            "Return: Level/Block, on-site date (or range), and which programme field(s) you used.",
-            "Do NOT use tracker rows for this question.",
-          ].join("\n"),
-      },
-    ],
-    [programmeHint]
-  );
+const quickTemplates = useMemo(
+  () => [
+    { id: "overdue_first_issue_all", label: "Overdue items for first issue on all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "overdue_first_issue_project", label: "Overdue items for first issue on a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
 
+    { id: "overdue_statusA_all", label: "Overdue items for Status A approval (all projects)", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "overdue_statusA_project", label: "Overdue items for Status A approval on a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
+
+    { id: "statusA_approved_all", label: "Which items have Status A approval for all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "statusA_approved_project", label: "Which items have Status A approval for a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
+
+    { id: "done_all", label: "Which items are marked as done for all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "done_project", label: "Which items are marked as done for a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
+
+    { id: "programme_range_all", label: "Construction programme for ALL projects on site during (date range)", needsProject: false, needsDateRange: true, needsAsOf: false },
+    { id: "programme_range_project", label: "Construction programme for a specific project on site during (date range)", needsProject: true, needsDateRange: true, needsAsOf: false },
+
+    { id: "compare_programme_all", label: "Compare construction programmes for ALL projects (as-of date vs current)", needsProject: false, needsDateRange: false, needsAsOf: true },
+    { id: "compare_programme_project", label: "Compare construction programme for a specific project (as-of date vs current)", needsProject: true, needsDateRange: false, needsAsOf: true },
+
+    { id: "comments_all", label: "Return all comments for all projects", needsProject: false, needsDateRange: false, needsAsOf: false },
+    { id: "comments_project", label: "Return comments for a specific project", needsProject: true, needsDateRange: false, needsAsOf: false },
+  ],
+  []
+);
+
+const projectOptions = useMemo(() => {
+  const ctx = chatContext || {};
+  const fromCtxState = Array.isArray(ctx?.state?.projects) ? ctx.state.projects : [];
+  const fromCtxProjects = Array.isArray(ctx?.projects) ? ctx.projects : [];
+  const fromProps = Array.isArray(props.projects) ? props.projects : [];
+  const names = []
+    .concat(fromProps)
+    .concat(fromCtxState)
+    .concat(fromCtxProjects)
+    .concat(Array.isArray(metaProjects) ? metaProjects : [])
+    .map((p) => (typeof p === "string" ? p : p?.name))
+    .filter(Boolean)
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+}, [props.projects, chatContext, metaProjects]);
   const selectedQuick = useMemo(
     () => quickTemplates.find((q) => q.id === quickId) || null,
     [quickId, quickTemplates]
   );
 
-  function buildQuickPrompt() {
-    if (!selectedQuick) return "";
-    if (selectedQuick.needsProject && !quickProject.trim()) return "";
-    if (selectedQuick.needsOnSite && !quickOnSite.trim()) return "";
-    return selectedQuick.build(quickProject.trim(), quickOnSite.trim());
+function buildQuickPrompt() {
+  const q = quickTemplates.find((x) => x.id === quickId);
+  if (!q) return "";
+
+  const params = {};
+
+  if (q.needsProject) {
+    const p = String(quickProject || "").trim();
+    if (!p) return "";
+    params.project = p;
   }
+
+  if (q.needsDateRange) {
+    const from = String(quickDateFrom || "").trim();
+    const to = String(quickDateTo || "").trim();
+    if (!from || !to) return "";
+    params.dateFrom = from;
+    params.dateTo = to;
+  }
+
+  if (q.needsAsOf) {
+    const asOf = String(quickAsOfDate || "").trim();
+    if (!asOf) return "";
+    params.asOfDate = asOf;
+  }
+
+  return `TEMPLATE:${q.id}\nPARAMS:${JSON.stringify(params)}`;
+}
 
   function insertQuick() {
     const p = buildQuickPrompt();
@@ -242,8 +196,7 @@ async function exportPdf() {
   async function handleSend(overrideText) {
     const text = (overrideText ?? input).trim();
     if (!text || busy) return;
-    const result = await sendChat(text);
-    if (result && typeof result === "object") setLastChatResult(result);
+    await sendChat(text);
     setInput("");
   }
 
@@ -316,62 +269,99 @@ async function exportPdf() {
 
         {/* Footer ALWAYS visible */}
         <div style={styles.footer}>
-          {/* Quick questions */}
-          <div style={styles.quickWrap}>
-            <div style={styles.quickRow}>
-              <select value={quickId} onChange={(e) => setQuickId(e.target.value)} style={styles.select}>
-                <option value="">Quick questions…</option>
-                {quickTemplates.map((q) => (
-                  <option key={q.id} value={q.id}>
-                    {q.label}
-                  </option>
-                ))}
-              </select>
 
-              <button
-                type="button"
-                onClick={insertQuick}
-                disabled={!buildQuickPrompt()}
-                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-              >
-                Insert
-              </button>
+{/* Quick questions */}
+<div style={styles.quickWrap}>
+  <div style={styles.quickRow}>
+    <select
+      value={quickId}
+      onChange={(e) => {
+        setQuickId(e.target.value);
+        setQuickProject("");
+        setQuickDateFrom("");
+        setQuickDateTo("");
+        setQuickAsOfDate("");
+      }}
+      style={styles.select}
+    >
+      <option value="">Quick questions…</option>
+      {quickTemplates.map((q) => (
+        <option key={q.id} value={q.id}>
+          {q.label}
+        </option>
+      ))}
+    </select>
 
-              <button
-                type="button"
-                onClick={askQuick}
-                disabled={!buildQuickPrompt()}
-                style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
-              >
-                Ask
-              </button>
-            </div>
+    <button
+      type="button"
+      onClick={insertQuick}
+      disabled={!buildQuickPrompt()}
+      style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+    >
+      Insert
+    </button>
 
-            {(selectedQuick?.needsProject || selectedQuick?.needsOnSite) && (
-              <div style={styles.quickRow}>
-                {selectedQuick?.needsProject && (
-                  <input
-                    value={quickProject}
-                    onChange={(e) => setQuickProject(e.target.value)}
-                    placeholder="Project name…"
-                    style={styles.input}
-                  />
-                )}
-                {selectedQuick?.needsOnSite && (
-                  <input
-                    value={quickOnSite}
-                    onChange={(e) => setQuickOnSite(e.target.value)}
-                    placeholder="Month / date / range…"
-                    style={styles.input}
-                  />
-                )}
-              </div>
-            )}
-          </div>
+    <button
+      type="button"
+      onClick={askQuick}
+      disabled={!buildQuickPrompt()}
+      style={{ ...styles.smallBtn, ...(!buildQuickPrompt() ? styles.btnDisabled : null) }}
+    >
+      Ask
+    </button>
+  </div>
 
-{/* FREE QUERY BOX (always visible, below quick questions) */}
-<div style={styles.queryBlock}>
-  <div style={styles.queryBoxLabel}>Ask anything:</div>
+  {(selectedQuick?.needsProject || selectedQuick?.needsDateRange || selectedQuick?.needsAsOf) && (
+    <div style={styles.quickRow}>
+      {selectedQuick?.needsProject && (
+        <select
+          value={quickProject}
+          onChange={(e) => setQuickProject(e.target.value)}
+          style={styles.select}
+        >
+          <option value="">
+            {projectOptions.length ? "Select project…" : (metaLoaded ? "No projects found" : "Loading projects…")}
+          </option>
+          {projectOptions.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {selectedQuick?.needsDateRange && (
+        <>
+          <input
+            type="date"
+            value={quickDateFrom}
+            onChange={(e) => setQuickDateFrom(e.target.value)}
+            style={styles.input}
+            title="From"
+          />
+          <input
+            type="date"
+            value={quickDateTo}
+            onChange={(e) => setQuickDateTo(e.target.value)}
+            style={styles.input}
+            title="To"
+          />
+        </>
+      )}
+
+      {selectedQuick?.needsAsOf && (
+        <input
+          type="date"
+          value={quickAsOfDate}
+          onChange={(e) => setQuickAsOfDate(e.target.value)}
+          style={styles.input}
+          title="As-of date"
+        />
+      )}
+    </div>
+  )}
+</div>
+<div style={styles.queryBoxLabel}>Ask anything:</div>
 
   <textarea
     value={input}
@@ -390,21 +380,7 @@ async function exportPdf() {
   />
 
   <div style={styles.sendRow}>
-    
-<button
-  type="button"
-  onClick={exportPdf}
-  disabled={!((lastChatResult?.answer || getLastAssistantText() || "").trim())}
-  style={{
-    ...styles.smallBtn,
-    marginRight: 8,
-    ...(!((lastChatResult?.answer || getLastAssistantText() || "").trim()) ? styles.btnDisabled : null),
-  }}
-  title="Export the latest answer to PDF"
->
-  Export PDF
-</button>
-<button
+    <button
       onClick={() => handleSend()}
       disabled={busy || !String(input).trim()}
       style={{ ...styles.sendBtn, ...(busy || !String(input).trim() ? styles.btnDisabled : null) }}
@@ -485,7 +461,7 @@ const styles = {
   checkbox: { width: 12, height: 12 },
   checkboxLabel: { fontSize: 11, color: "#111827" },
 
-  smallBtn: {
+  smallBtn: { flexShrink: 0,
     fontSize: 11,
     padding: "4px 8px",
     borderRadius: 8,
@@ -533,7 +509,7 @@ const styles = {
   },
 
   quickWrap: { display: "flex", flexDirection: "column", gap: 8 },
-  quickRow: { display: "flex", gap: 8, alignItems: "center" },
+  quickRow: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
   select: {
     flex: 1,
     border: "1px solid #e5e7eb",
