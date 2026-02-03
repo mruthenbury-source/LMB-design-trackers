@@ -56,6 +56,55 @@ export default function ChatOverlay(props) {
       }
     });
 
+  const [lastChatResult, setLastChatResult] = useState(null);
+
+function getLastAssistantText() {
+  const arr = Array.isArray(messages) ? messages : [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const m = arr[i];
+    if (m?.role === "assistant") {
+      if (typeof m.content === "string") return m.content;
+      if (typeof m.text === "string") return m.text;
+    }
+  }
+  return "";
+}
+
+async function exportPdf() {
+  const answerText = (lastChatResult?.answer || getLastAssistantText() || "").trim();
+  if (!answerText) return;
+
+  const payload = {
+    title: "LMD SupplySync Report",
+    answer: answerText,
+    rows: Array.isArray(lastChatResult?.data?.rows) ? lastChatResult.data.rows : [],
+    meta: lastChatResult?.data?.meta || {},
+  };
+
+  const res = await fetch("/api/exportPdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    alert("Export failed. " + (t || res.status));
+    return;
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "chat-export.pdf";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+
   // --- Quick question UI ---
   const [quickId, setQuickId] = useState("");
 const [quickProject, setQuickProject] = useState("");
@@ -380,6 +429,14 @@ function buildQuickPrompt() {
   />
 
   <div style={styles.sendRow}>
+<button
+  type="button"
+  onClick={exportPdf}
+  disabled={!lastAnswerText}
+  style={styles.smallBtn}
+>
+  Export PDF
+</button>   
     <button
       onClick={() => handleSend()}
       disabled={busy || !String(input).trim()}
