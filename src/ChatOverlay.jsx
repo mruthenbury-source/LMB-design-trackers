@@ -317,7 +317,8 @@ function buildQuickPrompt() {
         </div>
       </div>
     );
-  })}
+  })
+          )}
         </div>
 
         {/* Footer ALWAYS visible */}
