@@ -1,15 +1,19 @@
 import { app } from "@azure/functions";
-import { getUserContext } from "../shared/userContext.js";
-import { readAppState, readPermissionsForUser } from "../shared/sharepoint.js";
 
 app.http("bootstrap", {
   methods: ["GET"],
   authLevel: "anonymous",
   handler: async (request, context) => {
     try {
+      // Import lazily so module load can never kill all routes
+      const { getUserContext } = await import("../shared/userContext.js");
+      const { readAppState, readPermissionsForUser } = await import("../shared/sharepoint.js");
+
       const me = getUserContext(request);
       const state = await readAppState().catch(() => null);
-      const perms = me.authenticated ? await readPermissionsForUser(me).catch(() => ({ rolesByPageId: {}, role: "viewer" })) : { rolesByPageId: {}, role: "viewer" };
+      const perms = me.authenticated
+        ? await readPermissionsForUser(me).catch(() => ({ rolesByPageId: {}, role: "viewer" }))
+        : { rolesByPageId: {}, role: "viewer" };
 
       if (!state) {
         return {
@@ -43,3 +47,5 @@ app.http("bootstrap", {
     }
   },
 });
+
+
