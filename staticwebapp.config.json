@@ -1,56 +1,28 @@
 {
   "routes": [
-    {
-      "route": "/login",
-      "redirect": "/.auth/login/aad"
-    },
-    {
-      "route": "/logout",
-      "redirect": "/.auth/logout"
-    },
-    {
-      "route": "/api/state",
-      "allowedRoles": [
-        "authenticated"
-      ]
-    },
-    {
-      "route": "/api/unlock",
-      "allowedRoles": [
-        "admin"
-      ]
-    },
-    {
-      "route": "/api/tick",
-      "allowedRoles": [
-        "authenticated"
-      ]
-    },
-    {
-      "route": "/api/comment",
-      "allowedRoles": [
-        "authenticated"
-      ]
-    },
-    {
-      "route": "/api/backupWeekly",
-      "allowedRoles": [
-        "authenticated"
-      ]
-    },
-    {
-      "route": "/*",
-      "allowedRoles": [
-        "authenticated"
-      ]
-    }
+    { "route": "/login", "redirect": "/.auth/login/aad" },
+    { "route": "/logout", "redirect": "/.auth/logout" },
+
+    { "route": "/api/health", "allowedRoles": ["anonymous", "authenticated"] },
+    { "route": "/api/meta", "allowedRoles": ["anonymous", "authenticated"] },
+    { "route": "/api/bootstrap", "allowedRoles": ["anonymous", "authenticated"] },
+
+    { "route": "/api/state", "allowedRoles": ["anonymous", "authenticated"] },
+
+    { "route": "/api/chat", "allowedRoles": ["anonymous", "authenticated"] },
+    { "route": "/api/exportPdf", "allowedRoles": ["anonymous", "authenticated"] },
+
+    { "route": "/api/save", "allowedRoles": ["authenticated"] },
+    { "route": "/api/tick", "allowedRoles": ["authenticated"] },
+    { "route": "/api/backupWeekly", "allowedRoles": ["authenticated"] },
+
+    { "route": "/*", "allowedRoles": ["authenticated"] }
   ],
   "navigationFallback": {
-    "rewrite": "/index.html"
+    "rewrite": "/index.html",
+    "exclude": ["/api/*", "/assets/*"]
   },
   "responseOverrides": {
-    "401": {
-      "redirect": "/login"
-    }
+    "401": { "redirect": "/login" }
   }
 }
