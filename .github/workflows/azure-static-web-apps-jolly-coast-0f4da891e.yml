@@ -8,6 +8,11 @@ on:
     types: [opened, synchronize, reopened, closed]
     branches:
       - main
+      
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"      
 
 jobs:
   build_and_deploy_job:
@@ -46,6 +51,7 @@ jobs:
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_JOLLY_COAST_0F4DA891E }}
           action: "close"
+
 
 
 
