@@ -3,17 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "index.js",
-
-  "scripts": {
-    "build": "echo \"api build ok\""
-  },
-
+  "main": "src/index.js",
   "dependencies": {
     "@azure/functions": "^4.6.0",
     "@azure/storage-blob": "^12.17.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
-    "isomorphic-fetch": "^3.0.0",
-      }
+    "isomorphic-fetch": "^3.0.0"
+  }
 }
-
