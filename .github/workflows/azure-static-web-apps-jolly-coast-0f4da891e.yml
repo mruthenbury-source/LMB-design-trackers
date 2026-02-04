@@ -8,11 +8,6 @@ on:
     types: [opened, synchronize, reopened, closed]
     branches:
       - main
-      
-      - name: Use Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"      
 
 jobs:
   build_and_deploy_job:
@@ -36,8 +31,6 @@ jobs:
           app_location: "." # App source code path
           api_location: "api" # Api source code path - optional
           output_location: "dist" # Built app content directory - optional
-          
-
           ###### End of Repository/Build Configurations ######
 
   close_pull_request_job:
@@ -51,6 +44,8 @@ jobs:
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_JOLLY_COAST_0F4DA891E }}
           action: "close"
+
+
 
 
 
