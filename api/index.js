@@ -5,6 +5,5 @@ import "./src/functions/tick.js";
 import "./src/functions/health.js";
 import "./src/functions/backupWeekly.js";
 import "./src/functions/chat.js";
-import "./src/functions/exportPdf.js";
 import "./src/functions/state.js";
 import "./src/functions/meta.js";
