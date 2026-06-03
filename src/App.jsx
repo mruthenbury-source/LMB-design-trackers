@@ -254,6 +254,19 @@ function downloadCSV(filename, lines) {
 }
 
 /* ---------- defaults ---------- */
+function defaultSchema() {
+  return {
+    containerLabel: "Block",
+    containerPlural: "Blocks",
+    subContainerLabel: "Level",
+    subContainerPlural: "Levels",
+    dependentLabel: "Package",
+    dependentPlural: "Packages",
+  };
+}
+function resolveSchema(schema) {
+  return { ...defaultSchema(), ...(schema || {}) };
+}
 function defaultLevel(name = "Level 1") {
   return { id: uid(), name, startDate: "", finishDate: "" };
 }
@@ -261,7 +274,7 @@ function defaultMasterRow() {
   return { id: uid(), blockZone: "", levels: [defaultLevel("Level 1")] };
 }
 function defaultResponsibility() {
-  return { id: uid(), name: "", supplier: "" };
+  return { id: uid(), name: "", supplier: "", permissions: { users: [] } };
 }
 function defaultRow(kind = "item") {
   return {
@@ -290,6 +303,7 @@ function defaultProject(name = "New Project") {
   return {
     id: uid(),
     name,
+    schema: defaultSchema(),
     homeComments: [],
     master: [defaultMasterRow()],
     responsibilities: [defaultResponsibility()],
@@ -375,7 +389,8 @@ function buildProgrammeItems(master) {
   return items;
 }
 
-function ProgrammeGantt({ master, dense = false }) {
+function ProgrammeGantt({ master, schema, dense = false }) {
+  const sc = resolveSchema(schema);
   const items = useMemo(() => buildProgrammeItems(master), [master]);
 
   const range = useMemo(() => {
@@ -419,7 +434,7 @@ function ProgrammeGantt({ master, dense = false }) {
     return ticks;
   }, [range]);
 
-  if (!items.length) return <div style={styles.muted}>Add Blocks/Zones and Levels to see the programme.</div>;
+  if (!items.length) return <div style={styles.muted}>Add {sc.containerPlural} and {sc.subContainerPlural} to see the programme.</div>;
   if (!range) return <div style={styles.muted}>Add start/finish dates to see the programme.</div>;
 
   const rowStyle = dense ? styles.ganttRowDense : styles.ganttRow;
@@ -428,7 +443,7 @@ function ProgrammeGantt({ master, dense = false }) {
   return (
     <div style={styles.ganttWrap}>
       <div style={headerStyle}>
-        <div style={styles.ganttLabelCol}>Block/Zone — Level</div>
+        <div style={styles.ganttLabelCol}>{sc.containerLabel} — {sc.subContainerLabel}</div>
         <div style={styles.ganttChartCol}>
           <div style={styles.ganttAxis}>
             {monthTicks.map((t) => (
@@ -590,6 +605,24 @@ export default function App() {
     [canSeeAll, authRoles]
   );
 
+  const userEmail = useMemo(() => {
+    return String(authUser?.userDetails || authUser?.email || "").trim().toLowerCase();
+  }, [authUser]);
+
+  const hasItemAccess = useCallback(
+    (resp) => {
+      if (canSeeAll) return true;
+      const users = resp?.permissions?.users;
+      if (!Array.isArray(users) || users.length === 0) {
+        // No restriction set — fall back to supplier role check
+        return hasSupplierAccess(String(resp?.supplier || "").trim());
+      }
+      if (!userEmail) return false;
+      return users.map((u) => u.toLowerCase()).includes(userEmail);
+    },
+    [canSeeAll, userEmail, hasSupplierAccess]
+  );
+
   // Guests only see projects that have at least one tracker page for their supplier
   const visibleProjects = useMemo(() => {
     if (canSeeAll) return projects;
@@ -599,11 +632,10 @@ export default function App() {
         if (pg.meta?.isMaster) return false;
         const respId = pg.meta?.responsibilityId;
         const resp = (p.responsibilities || []).find((r) => r.id === respId);
-        const supplier = String(resp?.supplier || "").trim();
-        return supplier && hasSupplierAccess(supplier);
+        return hasItemAccess(resp);
       })
     );
-  }, [projects, canSeeAll, hasSupplierAccess]);
+  }, [projects, canSeeAll, hasItemAccess, hasSupplierAccess]);
 
   // Summary filters
   const [summaryFilter, setSummaryFilter] = useState("ongoing");
@@ -686,6 +718,7 @@ export default function App() {
                   id: r.id || uid(),
                   name: r.name || "",
                   supplier: r.supplier || "",
+                  permissions: r.permissions || { users: [] },
                 }))
               : [defaultResponsibility()];
   
@@ -740,7 +773,7 @@ export default function App() {
             });
           }
   
-          return { id: proj.id || uid(), name: proj.name || "Untitled Project", master, responsibilities, pages };
+          return { id: proj.id || uid(), name: proj.name || "Untitled Project", schema: resolveSchema(proj.schema), master, responsibilities, pages };
         });
   
         setProjects(hydrated);
@@ -924,8 +957,7 @@ export default function App() {
       if (pg.meta?.isMaster) return false;
       const respId = pg.meta?.responsibilityId;
       const resp = (proj.responsibilities || []).find((r) => r.id === respId);
-      const supplier = String(resp?.supplier || "").trim();
-      return supplier && hasSupplierAccess(supplier);
+      return hasItemAccess(resp);
     });
 
     if (!allowed.length) {
@@ -935,7 +967,7 @@ export default function App() {
 
     const pageOk = allowed.some((pg) => pg.id === activePageId);
     if (!pageOk) setActivePageId(allowed[0].id);
-  }, [isGuest, authUser, visibleProjects, activeProjectId, activePageId, view, hasSupplierAccess]);
+  }, [isGuest, authUser, visibleProjects, activeProjectId, activePageId, view, hasItemAccess]);
 
   /* ---- update helpers ---- */
   function updateProject(projectId, patch) {
@@ -993,12 +1025,17 @@ export default function App() {
     const next = (activeProject.master || []).filter((m) => m.id !== masterId);
     updateProject(activeProject.id, { master: next.length ? next : [defaultMasterRow()] });
   }
+  function updateSchema(patch) {
+    if (!activeProject) return;
+    updateProject(activeProject.id, { schema: { ...resolveSchema(activeProject.schema), ...patch } });
+  }
+
   function addLevel(masterId) {
     if (!activeProject) return;
     const next = (activeProject.master || []).map((m) => {
       if (m.id !== masterId) return m;
       const current = Array.isArray(m.levels) ? m.levels : [];
-      const name = `Level ${current.length + 1}`;
+      const name = `${resolveSchema(activeProject.schema).subContainerLabel} ${current.length + 1}`;
       return { ...m, levels: [...current, defaultLevel(name)] };
     });
     updateProject(activeProject.id, { master: next });
@@ -1328,6 +1365,7 @@ export default function App() {
   }
 
   const isMasterPage = !!activePage?.meta?.isMaster;
+  const projectSchema = useMemo(() => resolveSchema(activeProject?.schema), [activeProject?.schema]);
 
   /* ---------- PRINT PROGRAMME SUMMARY (only) ---------- */
   function printProgrammeSummary() {
@@ -1741,13 +1779,12 @@ return {
       if (pg.meta?.isMaster) return false;
       const respId = pg.meta?.responsibilityId;
       const resp = (proj.responsibilities || []).find((r) => r.id === respId);
-      const supplier = String(resp?.supplier || "").trim();
-      return supplier && hasSupplierAccess(supplier);
+      return hasItemAccess(resp);
     });
 
     if (allowed.length) setActivePageId(allowed[0].id);
     setView(VIEW.PROJECT);
-  }, [isBooting, canSeeAll, visibleProjects, hasSupplierAccess]);
+  }, [isBooting, canSeeAll, visibleProjects, hasItemAccess]);
 
   if (isBooting) {
     return (
@@ -1844,8 +1881,7 @@ return {
                 if (pg.meta?.isMaster) return false;
                 const respId = pg.meta?.responsibilityId;
                 const resp = (proj.responsibilities || []).find((r) => r.id === respId);
-                const supplier = String(resp?.supplier || "").trim();
-                return supplier && hasSupplierAccess(supplier);
+                return hasItemAccess(resp);
               });
               setActivePageId(allowed[0]?.id || null);
             } else {
@@ -1970,7 +2006,7 @@ return {
                   <div style={styles.projectHeader}>
                     <div>
                       <div style={styles.projectTitle}>{p.name}</div>
-                      <div style={styles.muted}>Programme from Block/Zone + Level start/finish dates</div>
+                      <div style={styles.muted}>Programme from {resolveSchema(p.schema).containerLabel} / {resolveSchema(p.schema).subContainerLabel} start/finish dates</div>
                     </div>
                     <button
                       style={styles.secondaryBtn}
@@ -1986,7 +2022,7 @@ return {
                   </div>
 
                   <div style={styles.projectGantt}>
-                    <ProgrammeGantt master={p.master || []} dense />
+                    <ProgrammeGantt master={p.master || []} schema={p.schema} dense />
                   </div>
                 </div>
               ))}
@@ -2301,10 +2337,9 @@ function ProjectView(props) {
       if (pg.meta?.isMaster) return false;
       const respId = pg.meta?.responsibilityId;
       const resp = (activeProject.responsibilities || []).find((r) => r.id === respId);
-      const supplier = String(resp?.supplier || "").trim();
-      return supplier && hasSupplierAccess(supplier);
+      return hasItemAccess(resp);
     });
-  }, [activeProject, canSeeAll, hasSupplierAccess]);
+  }, [activeProject, canSeeAll, hasItemAccess]);
 
   // If a guest lands on Project Home, immediately jump to their first allowed tracker page
   useEffect(() => {
@@ -2489,8 +2524,7 @@ function tickMilestone(row, field, checked) {
                 .filter((pg) => {
                   const respId = pg.meta?.responsibilityId;
                   const resp = (proj.responsibilities || []).find((r) => r.id === respId);
-                  const supplier = String(resp?.supplier || "").trim();
-                  return supplier && hasSupplierAccess(supplier);
+                  return hasItemAccess(resp);
                 })[0];
               setActivePageId(firstAllowed?.id || null);
             }
@@ -2530,7 +2564,7 @@ function tickMilestone(row, field, checked) {
           <img src="/supplysync-logo.PNG" alt="SupplySync" style={styles.brandLogo} />
           <div>
             <h1 style={styles.h1}>{activeProject?.name || "Project"}</h1>
-            <p style={styles.sub}>Project Home defines Blocks/Zones + Levels. Tracker pages auto-populate. Traffic is based on Status A.</p>
+            <p style={styles.sub}>Project Home defines the structure ({projectSchema.containerPlural} + {projectSchema.subContainerPlural}). Tracker pages auto-populate. Traffic is based on Status A.</p>
           </div>
         </div>
         <div style={styles.headerButtons}>
@@ -2620,10 +2654,46 @@ function tickMilestone(row, field, checked) {
             </div>
           </div>
 
+          {isAdmin ? (
+            <div style={{ marginTop: 10 }}>
+              <div style={styles.tableTop}>
+                <div>
+                  <h3 style={styles.h3}>Structure Settings</h3>
+                  <div style={styles.muted}>Rename the hierarchy levels to match your project terminology.</div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 8 }}>
+                {[
+                  { key: "containerLabel", pluralKey: "containerPlural", label: "Main container (e.g. Block, Building, Zone)" },
+                  { key: "subContainerLabel", pluralKey: "subContainerPlural", label: "Sub-container (e.g. Level, Floor, Area)" },
+                  { key: "dependentLabel", pluralKey: "dependentPlural", label: "Dependent (e.g. Package, Trade, Discipline)" },
+                ].map(({ key, pluralKey, label }) => (
+                  <label key={key} style={styles.label}>
+                    {label}
+                    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                      <input
+                        style={{ ...styles.input, flex: 1 }}
+                        value={projectSchema[key]}
+                        placeholder="Singular"
+                        onChange={(e) => updateSchema({ [key]: e.target.value, [pluralKey]: projectSchema[pluralKey] })}
+                      />
+                      <input
+                        style={{ ...styles.input, flex: 1 }}
+                        value={projectSchema[pluralKey]}
+                        placeholder="Plural"
+                        onChange={(e) => updateSchema({ [pluralKey]: e.target.value })}
+                      />
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div style={{ marginTop: 10 }}>
             <div style={styles.tableTop}>
               <div>
-                <h3 style={styles.h3}>Blocks / Zones</h3>
+                <h3 style={styles.h3}>{projectSchema.containerPlural}</h3>
               </div>
               <button
                 style={styles.primaryBtn}
@@ -2633,7 +2703,7 @@ function tickMilestone(row, field, checked) {
                 }}
                 disabled={!activeProject}
               >
-                + Block / Zone
+                + {projectSchema.containerLabel}
               </button>
             </div>
 
@@ -2641,8 +2711,8 @@ function tickMilestone(row, field, checked) {
               <table style={styles.table}>
                 <thead>
                   <tr>
-                    <th style={styles.th}>Block / Zone</th>
-                    <th style={styles.th}>Level</th>
+                    <th style={styles.th}>{projectSchema.containerLabel}</th>
+                    <th style={styles.th}>{projectSchema.subContainerLabel}</th>
                     <th style={styles.th}>Start</th>
                     <th style={styles.th}>Finish</th>
                     <th style={styles.th}>Duration</th>
@@ -2665,7 +2735,7 @@ function tickMilestone(row, field, checked) {
                               <td style={styles.td} rowSpan={(m.levels || []).length}>
                                 <input
                                   style={styles.input}
-                                  placeholder="e.g. Block A / Zone 1"
+                                  placeholder={`e.g. ${projectSchema.containerLabel} A`}
                                   value={m.blockZone}
                                   onChange={(e) => {
                                     if (!canEditProjectHomeStructure) return deny();
@@ -2678,7 +2748,7 @@ function tickMilestone(row, field, checked) {
                             <td style={styles.td}>
                               <input
                                 style={styles.input}
-                                placeholder={`Level ${idx + 1}`}
+                                placeholder={`${projectSchema.subContainerLabel} ${idx + 1}`}
                                 value={lv.name}
                                 onChange={(e) => {
                                   if (!canEditProjectHomeStructure) return deny();
@@ -2748,7 +2818,7 @@ function tickMilestone(row, field, checked) {
                                     addLevel(m.id);
                                   }}
                                 >
-                                  + Level
+                                  + {projectSchema.subContainerLabel}
                                 </button>
                                 <button
                                   style={styles.iconBtn}
@@ -2756,7 +2826,7 @@ function tickMilestone(row, field, checked) {
                                     if (!canEditProjectHomeStructure) return deny();
                                     removeLevel(m.id, lv.id);
                                   }}
-                                  title="Remove level"
+                                  title={`Remove ${projectSchema.subContainerLabel}`}
                                 >
                                   ✕
                                 </button>
@@ -2767,7 +2837,7 @@ function tickMilestone(row, field, checked) {
                                       if (!canEditProjectHomeStructure) return deny();
                                       removeMasterRow(m.id);
                                     }}
-                                    title="Remove block/zone"
+                                    title={`Remove ${projectSchema.containerLabel}`}
                                   >
                                     🗑
                                   </button>
@@ -2797,8 +2867,8 @@ function tickMilestone(row, field, checked) {
           <div style={{ marginTop: 14 }}>
             <div style={styles.tableTop}>
               <div>
-                <h3 style={styles.h3}>Design Responsibilities</h3>
-                <div style={styles.muted}>Each responsibility creates a page in this project.</div>
+                <h3 style={styles.h3}>{projectSchema.dependentPlural}</h3>
+                <div style={styles.muted}>Each {projectSchema.dependentLabel.toLowerCase()} creates a tracker page. Set allowed users to restrict access.</div>
               </div>
               <button
                 style={styles.primaryBtn}
@@ -2808,7 +2878,7 @@ function tickMilestone(row, field, checked) {
                 }}
                 disabled={!activeProject}
               >
-                + Responsibility
+                + {projectSchema.dependentLabel}
               </button>
             </div>
 
@@ -2816,8 +2886,9 @@ function tickMilestone(row, field, checked) {
               <table style={styles.table}>
                 <thead>
                   <tr>
-                    <th style={styles.th}>Responsibility (page name)</th>
-                    <th style={styles.th}>Supplier</th>
+                    <th style={styles.th}>{projectSchema.dependentLabel} (page name)</th>
+                    <th style={styles.th}>Supplier / Assignee</th>
+                    <th style={styles.th}>Allowed Users (emails)</th>
                     <th style={styles.th}></th>
                   </tr>
                 </thead>
@@ -2847,6 +2918,22 @@ function tickMilestone(row, field, checked) {
                         />
                       </td>
                       <td style={styles.td}>
+                        <input
+                          style={{ ...styles.input, fontSize: 11 }}
+                          placeholder="user@email.com, user2@email.com (blank = all)"
+                          value={(r.permissions?.users || []).join(", ")}
+                          onChange={(e) => {
+                            if (!canEditProjectHomeStructure) return deny();
+                            const users = e.target.value
+                              .split(",")
+                              .map((s) => s.trim().toLowerCase())
+                              .filter(Boolean);
+                            updateResponsibility(r.id, { permissions: { ...(r.permissions || {}), users } });
+                          }}
+                          title="Leave blank to allow all. Add email addresses comma-separated to restrict access."
+                        />
+                      </td>
+                      <td style={styles.td}>
                         <button
                           style={styles.iconBtn}
                           onClick={() => {
@@ -2869,11 +2956,11 @@ function tickMilestone(row, field, checked) {
             <div style={styles.tableTop}>
               <div>
                 <h3 style={styles.h3}>Programme</h3>
-                <div style={styles.muted}>Simple Gantt chart using Level start/finish dates.</div>
+                <div style={styles.muted}>Simple Gantt chart using {projectSchema.subContainerLabel} start/finish dates.</div>
               </div>
             </div>
             <div style={styles.cardInset}>
-              <ProgrammeGantt master={activeProject?.master || []} />
+              <ProgrammeGantt master={activeProject?.master || []} schema={activeProject?.schema} />
             </div>
           </div>
         </div>
