@@ -146,6 +146,16 @@ app.http("mobileUploadTargets", {
       const schema = { ...defaultSchema(), ...(project.schema || {}) };
       const targets = collectTargets(project);
 
+      // Also expose pages so mobile can resolve scope keys
+      const pages = (Array.isArray(project.pages) ? project.pages : [])
+        .filter((p) => !p.meta?.isMaster)
+        .map((p) => ({
+          id: first(p.id, p.pageId, p.name),
+          name: first(p.name, p.pageName),
+          responsibilityId: first(p.meta?.responsibilityId, p.responsibilityId),
+          packageName: first(p.meta?.packageName, p.packageName, p.name),
+        }));
+
       return {
         status: 200,
         headers: { "Cache-Control": "no-store" },
@@ -157,10 +167,12 @@ app.http("mobileUploadTargets", {
           },
           schema,
           ...targets,
+          pages,
           counts: {
             containers: targets.containers.length,
             dependents: targets.dependents.length,
             rows: targets.rows.length,
+            pages: pages.length,
           },
         },
       };
