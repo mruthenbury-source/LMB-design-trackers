@@ -6,4 +6,6 @@ import "./functions/backupWeekly.js";
 import "./functions/chat.js";
 import "./functions/state.js";
 import "./functions/meta.js";
+import "./functions/mobileUploadTargets.js";
+import "./functions/hierarchyConfig.js";
 
